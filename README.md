@@ -1,10 +1,10 @@
 # Apocrypha
 
-Apocrypha is Jensen's single-user, append-only remote MCP memory for personal context that assistants' normal built-in memory systems are not allowed to store. Claude and ChatGPT share the same standard Streamable HTTP endpoint at `/mcp`. It supports standards-based OAuth 2.1 for clients such as Claude, while retaining a separate static bearer token for clients that can set an authorization header directly.
+Apocrypha is Jensen's single-user, append-only remote MCP memory for useful personal context an assistant judges it should not place in its normal built-in memory. Claude and ChatGPT share the same standard Streamable HTTP endpoint at `/mcp`. It supports standards-based OAuth 2.1 for clients such as Claude, while retaining a separate static bearer token for clients that can set an authorization header directly.
 
 ## Scope: exceptional memory only
 
-Apocrypha is not a second general-purpose memory store. An assistant should write here only when a useful durable fact cannot be stored in its normal memory system because of that system's memory policy—for example, housing, income, financial runway, socioeconomic circumstances, or related work-pipeline context. Facts eligible for ordinary built-in memory belong there and should not also be copied into Apocrypha. This separation avoids redundant or conflicting memories across systems.
+Apocrypha follows OptMem's general memory and compression semantics with one specialization: it is not a second general-purpose memory store. An assistant should write here only when personal context is worth remembering but the assistant judges it is not supposed to save that context in its own personal memory bank—for example, housing, income, financial runway, socioeconomic circumstances, or related work-pipeline context. Facts eligible for ordinary built-in memory belong there and should not also be copied into Apocrypha. This separation avoids redundant or conflicting memories across systems.
 
 `LOG.txt` is authoritative. It uses OptMem's 320-byte fixed-width records (one newline-terminated memory per record), and `TREE/<size>` uses its 288-byte fixed-width binary-merge records. Corrections are later log entries; raw memories are never edited or deleted. Google Drive is only a phone-readable mirror.
 
@@ -18,7 +18,7 @@ Apocrypha is not a second general-purpose memory store. An assistant should writ
 
 Wake intentionally returns every raw record while the log fits within its 96-line rendering budget. Once the log exceeds that budget, it tiles the full history with stored tree summaries toward the past and progressively finer detail toward the present. A note returns only the first newly-doable compression; each sleep response returns the next task in the cascade. Draining that cascade before wake is deliberate, because wake never renders from a partially built tree.
 
-Compression tasks instruct the writer to preserve standing directives about how to treat Jensen verbatim over episodic detail. The raw log remains authoritative regardless of what a summary omits.
+Compression follows OptMem's category-neutral rule: keep what has lasting effect, drop what does not, and invent nothing. The raw log remains authoritative regardless of what a summary omits.
 
 ## Local verification
 

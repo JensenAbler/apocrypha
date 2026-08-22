@@ -30,9 +30,12 @@ test("MCP exposes five portable tools and rejects a 400-character note", async (
     const noteTool = listed.tools.find((tool) => tool.name === "apocrypha_note");
     assert.equal(wake.description, WAKE_DESCRIPTION);
     assert.equal(wake.annotations.readOnlyHint, true);
-    assert.match(noteTool.description, /not allowed to store/);
+    assert.match(noteTool.description, /not supposed to save/);
     assert.match(noteTool.description, /Do not duplicate/);
     assert.match(noteTool.description, /Do not store system state/);
+    const sleepTool = listed.tools.find((tool) => tool.name === "apocrypha_sleep");
+    assert.match(sleepTool.description, /Keep what has lasting effect, drop what does not, and invent nothing/);
+    assert.doesNotMatch(sleepTool.description, /standing directives/i);
 
     const multibyte = await client.callTool({ name: "apocrypha_note", arguments: { text: "—".repeat(94) } });
     assert.equal(multibyte.isError, true);

@@ -44,6 +44,19 @@ test("normalizes whitespace, assigns sequential ids, and enforces UTF-8 limit", 
   }
 });
 
+test("compression prompt follows OptMem without directive categories", () => {
+  const { directory, store } = temporaryStore();
+  try {
+    store.append("first memory", "2026-08-22");
+    store.append("second memory", "2026-08-22");
+    const task = store.compressionTask();
+    assert.match(task, /Keep what has lasting effect, drop what does not\. Invent nothing\./);
+    assert.doesNotMatch(task, /directive/i);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("2,000 memories build a complete immutable merge tree and bounded wake", { timeout: 60_000 }, () => {
   const { directory, store } = temporaryStore();
   try {
