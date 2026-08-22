@@ -34,6 +34,16 @@ function escapeHtml(value) {
     .replaceAll("'", "&#39;");
 }
 
+function approvalSecurityHeaders(redirectUri) {
+  const redirectOrigin = new URL(redirectUri).origin;
+  return {
+    "content-type": "text/html; charset=utf-8",
+    "content-security-policy": `default-src 'none'; style-src 'unsafe-inline'; form-action 'self' ${redirectOrigin}; base-uri 'none'; frame-ancestors 'none'`,
+    "referrer-policy": "no-referrer",
+    "x-frame-options": "DENY",
+  };
+}
+
 function approvalHtml({ pendingId, clientName, redirectHost, error = "" }) {
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -130,12 +140,7 @@ export class ApocryphaOAuthProvider {
     const redirectHost = new URL(params.redirectUri).host;
     res
       .status(200)
-      .set({
-        "content-type": "text/html; charset=utf-8",
-        "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
-        "referrer-policy": "no-referrer",
-        "x-frame-options": "DENY",
-      })
+      .set(approvalSecurityHeaders(params.redirectUri))
       .send(approvalHtml({
         pendingId,
         clientName: client.client_name || "An MCP client",
@@ -167,12 +172,7 @@ export class ApocryphaOAuthProvider {
     if (!safeEqual(accessKey, this.accessKey)) {
       res
         .status(401)
-        .set({
-          "content-type": "text/html; charset=utf-8",
-          "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
-          "referrer-policy": "no-referrer",
-          "x-frame-options": "DENY",
-        })
+        .set(approvalSecurityHeaders(request.params.redirectUri))
         .send(approvalHtml({
           pendingId,
           clientName: client.client_name || "An MCP client",

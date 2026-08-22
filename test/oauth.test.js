@@ -65,6 +65,7 @@ test("OAuth discovery, DCR, PKCE, access tokens, and rotating refresh tokens", a
     const approvalBody = await approval.text();
     assert.equal(approval.status, 200);
     assert.match(approvalBody, /Authorize Apocrypha/);
+    assert.match(approval.headers.get("content-security-policy"), /form-action 'self' https:\/\/claude\.ai/);
     const pending = /name="pending" value="([^"]+)"/.exec(approvalBody)[1];
 
     const wrong = await fetch(`${base}/oauth/approve`, {
