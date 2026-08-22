@@ -7,7 +7,7 @@ import { getOAuthProtectedResourceMetadataUrl, mcpAuthRouter } from "@modelconte
 import { ApocryphaStore } from "./storage.js";
 import { createApocryphaMcpServer } from "./mcp.js";
 import { isDriveConfigured } from "./drive.js";
-import { ApocryphaOAuthProvider, createOAuthApprovalRouter } from "./oauth.js";
+import { ApocryphaOAuthProvider, OAUTH_SCOPES, createOAuthApprovalRouter } from "./oauth.js";
 
 const port = Number(process.env.PORT || 8787);
 const host = "127.0.0.1";
@@ -68,7 +68,7 @@ app.use(mcpAuthRouter({
   provider: oauthProvider,
   issuerUrl: publicOrigin,
   resourceServerUrl: resourceUrl,
-  scopesSupported: ["apocrypha"],
+  scopesSupported: OAUTH_SCOPES,
   resourceName: "Apocrypha",
   clientRegistrationOptions: { clientSecretExpirySeconds: 0 },
 }));

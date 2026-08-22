@@ -7,11 +7,13 @@ import {
   InvalidClientMetadataError,
   InvalidGrantError,
   InvalidRequestError,
+  InvalidScopeError,
 } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 
 const ACCESS_TOKEN_SECONDS = 60 * 60;
 const PENDING_SECONDS = 10 * 60;
 const DEFAULT_SCOPE = "apocrypha";
+export const OAUTH_SCOPES = [DEFAULT_SCOPE, "offline_access"];
 
 function opaqueToken() {
   return randomBytes(32).toString("base64url");
@@ -116,6 +118,9 @@ export class ApocryphaOAuthProvider {
 
   async authorize(client, params, res) {
     if (!this.validResource(params.resource)) throw new InvalidRequestError("Invalid resource audience.");
+    if (params.scopes.some((scope) => !OAUTH_SCOPES.includes(scope))) {
+      throw new InvalidScopeError("Requested scope is not supported.");
+    }
     const pendingId = opaqueToken();
     this.pending.set(pendingId, {
       clientId: client.client_id,

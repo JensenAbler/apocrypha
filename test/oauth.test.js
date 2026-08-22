@@ -8,7 +8,7 @@ import test from "node:test";
 import express from "express";
 import { mcpAuthRouter } from "@modelcontextprotocol/sdk/server/auth/router.js";
 
-import { ApocryphaOAuthProvider, createOAuthApprovalRouter } from "../src/oauth.js";
+import { ApocryphaOAuthProvider, OAUTH_SCOPES, createOAuthApprovalRouter } from "../src/oauth.js";
 
 test("OAuth discovery, DCR, PKCE, access tokens, and rotating refresh tokens", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "apocrypha-oauth-"));
@@ -20,7 +20,7 @@ test("OAuth discovery, DCR, PKCE, access tokens, and rotating refresh tokens", a
     provider,
     issuerUrl: new URL("http://127.0.0.1:9999"),
     resourceServerUrl: resourceUrl,
-    scopesSupported: ["apocrypha"],
+    scopesSupported: OAUTH_SCOPES,
     resourceName: "Apocrypha",
     clientRegistrationOptions: { clientSecretExpirySeconds: 0 },
   }));
@@ -31,7 +31,7 @@ test("OAuth discovery, DCR, PKCE, access tokens, and rotating refresh tokens", a
   try {
     const metadata = await (await fetch(`${base}/.well-known/oauth-protected-resource/mcp`)).json();
     assert.equal(metadata.resource, resourceUrl.href);
-    assert.deepEqual(metadata.scopes_supported, ["apocrypha"]);
+    assert.deepEqual(metadata.scopes_supported, ["apocrypha", "offline_access"]);
 
     const registrationResponse = await fetch(`${base}/register`, {
       method: "POST",
@@ -57,7 +57,7 @@ test("OAuth discovery, DCR, PKCE, access tokens, and rotating refresh tokens", a
       response_type: "code",
       code_challenge: challenge,
       code_challenge_method: "S256",
-      scope: "apocrypha",
+      scope: "apocrypha offline_access",
       state: "acceptance-state",
       resource: resourceUrl.href,
     }).toString();
@@ -101,6 +101,7 @@ test("OAuth discovery, DCR, PKCE, access tokens, and rotating refresh tokens", a
     const tokens = await tokenResponse.json();
     assert.ok(tokens.access_token);
     assert.ok(tokens.refresh_token);
+    assert.equal(tokens.scope, "apocrypha offline_access");
     const verified = await provider.verifyAccessToken(tokens.access_token);
     assert.equal(verified.clientId, client.client_id);
     assert.equal(verified.resource.href, resourceUrl.href);
