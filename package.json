@@ -1,0 +1,22 @@
+{
+  "name": "apocrypha",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Append-only MCP memory for personal context ordinary assistant memory cannot store",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test",
+    "oauth:google": "node scripts/google-oauth.mjs",
+    "drive:check": "node scripts/check-drive.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "express": "^5.1.0",
+    "zod": "^3.25.0"
+  }
+}

@@ -1,0 +1,23 @@
+[Unit]
+Description=Apocrypha remote MCP server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=apocrypha
+Group=apocrypha
+WorkingDirectory=/srv/apocrypha
+EnvironmentFile=/etc/apocrypha.env
+ExecStart=/usr/bin/node /srv/apocrypha/src/server.js
+Restart=always
+RestartSec=3
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/apocrypha
+
+[Install]
+WantedBy=multi-user.target
