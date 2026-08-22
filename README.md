@@ -25,6 +25,16 @@ npm test
 
 The tests include a 2,000-memory OptMem stress run, fixed-record and tree invariants, paging, increasing detail toward the present, forget/rebuild byte identity, restart persistence, MCP schemas, and the Drive `batchUpdate` request.
 
+## Development and deployment workflow
+
+`C:\Users\Jensen\code\apochrypha` is the development checkout. GitHub's public `main` branch is the release source, and Alpha deploys that published branch rather than unpublished local files.
+
+1. Make changes in the local checkout and run `npm test`.
+2. Commit the changes and push `main` to GitHub.
+3. From PowerShell, run `./scripts/deploy-alpha.ps1`.
+
+The deployment script refuses a dirty tree, a non-`main` branch, or a local commit that differs from `origin/main`. On Alpha it performs a fast-forward-only update, installs locked production dependencies, restarts the service, and verifies the local health endpoint. Runtime state remains separate: credentials live in `/etc/apocrypha.env`, while the append-only log, summary tree, and OAuth state live in `/var/lib/apocrypha`; none are part of Git.
+
 ## Google authorization (one time, on the laptop)
 
 1. In Google Cloud, enable the Google Docs API and create a Desktop OAuth client.
