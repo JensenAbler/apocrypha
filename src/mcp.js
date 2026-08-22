@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 import { queueDriveMirror } from "./drive.js";
+import { ENTRY_BYTES } from "./storage.js";
 
 const WAKE_DESCRIPTION = [
   "MANDATORY: call this before answering whenever Jensen's work, money, housing, planning, or life situation may be relevant.",
@@ -12,6 +13,23 @@ const WAKE_DESCRIPTION = [
 
 function textResult(text) {
   return { content: [{ type: "text", text }] };
+}
+
+function normalizedMemorySchema(label) {
+  return z.string().superRefine((value, context) => {
+    const normalized = value.trim().replace(/\s+/gu, " ");
+    if (!normalized) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: `${label} must not be empty.` });
+      return;
+    }
+    const bytes = Buffer.byteLength(normalized, "utf8");
+    if (bytes > ENTRY_BYTES) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `${label} must be at most ${ENTRY_BYTES} UTF-8 bytes after whitespace normalization (got ${bytes}).`,
+      });
+    }
+  });
 }
 
 function errorResult(error) {
@@ -52,9 +70,9 @@ export function createApocryphaMcpServer(store, options = {}) {
     "apocrypha_note",
     {
       title: "Record an Apocrypha memory",
-      description: "Append one durable fact about Jensen only when the assistant's normal memory system is not allowed to store it. Do not duplicate facts eligible for ordinary memory. Whitespace is collapsed to one line; the raw log is never edited or deleted. If a compression task is returned, complete it next with apocrypha_sleep.",
+      description: "Append one durable fact about Jensen only when the assistant's normal memory system is not allowed to store it. Do not duplicate facts eligible for ordinary memory. Do not store system state, infrastructure, repository details, or facts recoverable from documentation. Whitespace is collapsed to one line; the raw log is never edited or deleted. If a compression task is returned, complete it next with apocrypha_sleep.",
       inputSchema: {
-        text: z.string().min(1).max(280).describe("One memory, 1-280 characters and at most 280 UTF-8 bytes."),
+        text: normalizedMemorySchema("text").describe("One memory, at most 280 UTF-8 bytes after whitespace normalization."),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
@@ -75,10 +93,10 @@ export function createApocryphaMcpServer(store, options = {}) {
     "apocrypha_sleep",
     {
       title: "Compress Apocrypha",
-      description: "With no arguments, return the next required binary-tree compression. With both range and summary, save that exact block once and return the next task. Continue until it says Nothing left to compress.",
+      description: "With no arguments, return the next required binary-tree compression. With both range and summary, save that exact block once and return the next task. Preserve standing directives about how to treat Jensen verbatim over episodic detail. Continue until it says Nothing left to compress.",
       inputSchema: {
         range: z.string().optional().describe("Inclusive aligned block range copied from the task, for example 16-31."),
-        summary: z.string().min(1).max(280).optional().describe("Faithful one-line summary, at most 280 UTF-8 bytes."),
+        summary: normalizedMemorySchema("summary").optional().describe("Faithful one-line summary, at most 280 UTF-8 bytes after whitespace normalization."),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },

@@ -16,6 +16,10 @@ Apocrypha is not a second general-purpose memory store. An assistant should writ
 - `apocrypha_recall`: case-insensitive regex search of the complete raw log.
 - `apocrypha_forget`: truncates a wrong summary and all summaries above it, without touching the log.
 
+Wake intentionally returns every raw record while the log fits within its 96-line rendering budget. Once the log exceeds that budget, it tiles the full history with stored tree summaries toward the past and progressively finer detail toward the present. A note returns only the first newly-doable compression; each sleep response returns the next task in the cascade. Draining that cascade before wake is deliberate, because wake never renders from a partially built tree.
+
+Compression tasks instruct the writer to preserve standing directives about how to treat Jensen verbatim over episodic detail. The raw log remains authoritative regardless of what a summary omits.
+
 ## Local verification
 
 ```sh
@@ -47,6 +51,8 @@ The deployment script refuses a dirty tree, a non-`main` branch, or a local comm
    ```
 
 The helper requests `access_type=offline`, `prompt=consent`, and only `https://www.googleapis.com/auth/documents`. Put the printed refresh token in `/etc/apocrypha.env`; do not commit it.
+
+The mirror targets `GOOGLE_DOC_ID`, not the document title. Renaming the Google Doc does not break synchronization and must not be replaced with title-based lookup.
 
 ## Deploy on Alpha
 

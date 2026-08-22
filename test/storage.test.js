@@ -90,6 +90,14 @@ test("2,000 memories build a complete immutable merge tree and bounded wake", { 
     assert.equal(rendered.length, tiles.length);
     assert.match(rendered[0], /^#0-/);
     assert.match(rendered.at(-1), /^#1999 /);
+    for (let index = 0; index < rendered.length; index += 1) {
+      const [lo, hi] = tiles[index];
+      if (hi - lo > 1) {
+        assert.equal(rendered[index], `#${lo}-${hi - 1} summary of ${lo}-${hi - 1}`);
+      } else {
+        assert.equal(rendered[index], store.get(lo));
+      }
+    }
 
     const treeFingerprint = new Map(
       fs.readdirSync(store.treeDirectory).map((file) => [file, fs.readFileSync(path.join(store.treeDirectory, file))]),

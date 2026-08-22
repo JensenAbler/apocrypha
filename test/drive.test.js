@@ -32,7 +32,8 @@ test("Drive mirror replaces the body with a full raw-log rendering", async () =>
     assert.deepEqual(request.requests[0], {
       deleteContentRange: { range: { startIndex: 1, endIndex: 41 } },
     });
-    assert.match(request.requests[1].insertText.text, /^#0 2026-08-22 first fact\n#1 2026-08-22 second fact\n$/);
+    assert.equal(request.requests[1].insertText.text, "#0 2026-08-22 first fact\n#1 2026-08-22 second fact\n");
+    assert.doesNotMatch(request.requests[1].insertText.text, /\\#\d/);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }

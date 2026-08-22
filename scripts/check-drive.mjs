@@ -19,8 +19,11 @@ const document = await response.json();
 const rendered = textRuns(document.body).join("");
 const store = new ApocryphaStore(process.env.MEMORY_DIR);
 const entries = store.entries();
+const lines = rendered.split("\n");
 console.log(JSON.stringify({
   titleMatches: document.title === GOOGLE_DOC_TITLE,
   memories: entries.length,
   allMemoriesPresent: entries.every((entry) => rendered.includes(entry)),
+  rawIdPrefixes: lines.filter((line) => /^#\d/.test(line)).length,
+  escapedIdPrefixes: lines.filter((line) => /^\\#\d/.test(line)).length,
 }));

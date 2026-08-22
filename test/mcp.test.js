@@ -32,15 +32,32 @@ test("MCP exposes five portable tools and rejects a 400-character note", async (
     assert.equal(wake.annotations.readOnlyHint, true);
     assert.match(noteTool.description, /not allowed to store/);
     assert.match(noteTool.description, /Do not duplicate/);
+    assert.match(noteTool.description, /Do not store system state/);
+
+    const multibyte = await client.callTool({ name: "apocrypha_note", arguments: { text: "—".repeat(94) } });
+    assert.equal(multibyte.isError, true);
+    assert.match(multibyte.content[0].text, /text must be at most 280 UTF-8 bytes.*got 282/);
+    assert.equal(store.count(), 0);
 
     const tooLong = await client.callTool({ name: "apocrypha_note", arguments: { text: "x".repeat(400) } });
     assert.equal(tooLong.isError, true);
     assert.equal(store.count(), 0);
 
+    store.append("left half", "2026-08-22");
+    store.append("right half", "2026-08-22");
+    const multibyteSummary = await client.callTool({
+      name: "apocrypha_sleep",
+      arguments: { range: "0-1", summary: "—".repeat(94) },
+    });
+    assert.equal(multibyteSummary.isError, true);
+    assert.match(multibyteSummary.content[0].text, /summary must be at most 280 UTF-8 bytes.*got 282/);
+    assert.equal(store.pendingCount(), 1);
+    store.sleep("0-1", "two setup entries");
+
     const note = await client.callTool({ name: "apocrypha_note", arguments: { text: "  housing\n context  " } });
-    assert.match(note.content[0].text, /^Saved as #0\./);
+    assert.match(note.content[0].text, /^Saved as #2\./);
     const wakeResult = await client.callTool({ name: "apocrypha_wake", arguments: {} });
-    assert.match(wakeResult.content[0].text, /#0 .* housing context/);
+    assert.match(wakeResult.content[0].text, /#2 .* housing context/);
   } finally {
     await client.close();
     await server.close();

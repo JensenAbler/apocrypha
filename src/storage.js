@@ -262,6 +262,7 @@ export class ApocryphaStore {
     return [
       `Compress memories #${lo}-${hi - 1} into one line of at most ${ENTRY_BYTES} UTF-8 bytes.`,
       "Keep what has lasting effect, drop what does not. Invent nothing.",
+      "Preserve standing directives about how to treat Jensen verbatim, even over episodic detail.",
       "",
       source,
       tail,
