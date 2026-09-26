@@ -1,17 +1,24 @@
 # Apocrypha
 
-Apocrypha is Jensen's single-user, append-only remote MCP memory for useful personal context an assistant judges it should not place in its normal built-in memory. Claude and ChatGPT share the same standard Streamable HTTP endpoint at `/mcp`. It supports standards-based OAuth 2.1 for clients such as Claude, while retaining a separate static bearer token for clients that can set an authorization header directly.
+Apocrypha is Jensen's single-user, append-only remote MCP memory, shared between his Claude and ChatGPT assistants. Claude and ChatGPT share the same standard Streamable HTTP endpoint at `/mcp`. It supports standards-based OAuth 2.1 for clients such as Claude, while retaining a separate static bearer token for clients that can set an authorization header directly.
 
-## Scope: exceptional memory only
+## Scope
 
-Apocrypha follows OptMem's general memory and compression semantics with one specialization: it is not a second general-purpose memory store. An assistant should write here only when personal context is worth remembering but the assistant judges it is not supposed to save that context in its own personal memory bank—for example, housing, income, financial runway, socioeconomic circumstances, or related work-pipeline context. Facts eligible for ordinary built-in memory belong there and should not also be copied into Apocrypha. This separation avoids redundant or conflicting memories across systems.
+Apocrypha follows OptMem's general memory and compression semantics. It is not a second general-purpose memory store; its scope is:
+
+- **Core:** personal context Jensen stated that an assistant's built-in memory is barred from storing for custody or exposure reasons: money, housing, health, sexuality, emotional life, politics, religion, identity. Whether something is barred natively is the assistant's call; whether it's worth keeping is Jensen's.
+- **Shared by design:** being common to Claude and ChatGPT is central to its value. Overlap with built-in memory is allowed only deliberately, when having it in the shared store is the point, and should be revisited as things change.
+- **Inferences:** an assistant's own reads on Jensen may be stored only when labeled as the assistant's and reviewed by Jensen. Compression must keep those labels.
+- **Never:** ID or account numbers (the Drive mirror widens exposure); suicide, self-harm, or disordered-eating records; instructions that would make an assistant less honest or less willing to push back; system state or anything recoverable from documentation.
+
+The boundary moves when the assistants' built-in memory constraints move. Waking is on-demand, not mandatory, and what it loads is background, not something to raise unprompted.
 
 `LOG.txt` is authoritative. It uses OptMem's 320-byte fixed-width records (one newline-terminated memory per record), and `TREE/<size>` uses its 288-byte fixed-width binary-merge records. Corrections are later log entries; raw memories are never edited or deleted. Google Drive is only a phone-readable mirror.
 
 ## Tools
 
-- `apocrypha_wake`: mandatory standing-context read, paged below client response limits; refuses while any compression is pending.
-- `apocrypha_note`: records only otherwise-disallowed durable context, collapses whitespace, appends a dated memory, mirrors Drive, and returns the next newly-doable compression.
+- `apocrypha_wake`: on-demand read of the shared context, paged below client response limits; refuses while any compression is pending.
+- `apocrypha_note`: records one in-scope durable memory (see Scope), collapses whitespace, appends a dated memory, mirrors Drive, and returns the next newly-doable compression.
 - `apocrypha_sleep`: gets or settles the next merge-tree compression.
 - `apocrypha_recall`: case-insensitive regex search of the complete raw log.
 - `apocrypha_forget`: truncates a wrong summary and all summaries above it, without touching the log.

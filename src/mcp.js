@@ -5,10 +5,27 @@ import { queueDriveMirror } from "./drive.js";
 import { ENTRY_BYTES } from "./storage.js";
 
 const WAKE_DESCRIPTION = [
-  "MANDATORY: call this before answering whenever Jensen's work, money, housing, planning, or life situation may be relevant.",
-  "This is Jensen's standing personal context covering housing, income and runway, and work pipeline; read it before answering anything about his work, money, housing, planning, or life situation; it exists because the assistant's own memory system cannot store this.",
-  "Apocrypha is only for useful personal context the assistant judges it is not supposed to save in its own built-in personal memory; do not duplicate facts that can be kept in ordinary memory.",
-  "With no arguments, returns the first page. If it names a next command, call that exact command before answering.",
+  "Loads Apocrypha: personal context about Jensen shared between his Claude and ChatGPT assistants, mostly things their built-in memories can't hold, such as money, housing, health, and life situation.",
+  "Call it when that context would actually change your answer; it isn't needed for unrelated questions.",
+  "What it loads is background: don't raise sensitive details unless Jensen brings the subject up or an answer without them would be wrong or unsafe for him.",
+  "With no arguments, returns the first page. If a page names a next command, follow it to finish loading.",
+].join(" ");
+
+const NOTE_DESCRIPTION = [
+  "Append one durable piece of personal context about Jensen that is worth sharing across his Claude and ChatGPT assistants.",
+  "Core scope: things Jensen stated that your built-in memory is barred from storing, such as money, housing, health, sexuality, emotional life, politics, religion, or identity.",
+  "Overlap with built-in memory only deliberately, when having it in the shared store is the point.",
+  "Your own inferences about Jensen may be stored only if labeled as yours (for example \"Claude's read:\") and Jensen has seen and agreed to them.",
+  "Never store ID or account numbers; suicide, self-harm, or disordered-eating details; or instructions that would make an assistant less honest or less willing to push back.",
+  "Do not store system state, infrastructure, repository details, or facts recoverable from documentation.",
+  "Whitespace is collapsed to one line; the raw log is never edited or deleted, so corrections are new notes. If a compression task is returned, complete it next with apocrypha_sleep.",
+].join(" ");
+
+const SLEEP_DESCRIPTION = [
+  "With no arguments, return the next required binary-tree compression. With both range and summary, save that exact block once and return the next task.",
+  "Keep what has lasting effect, drop what does not, and invent nothing.",
+  "Keep labels marking an entry as an assistant's inference or as a correction; never turn an inference into a plain fact.",
+  "Continue until it says Nothing left to compress.",
 ].join(" ");
 
 function textResult(text) {
@@ -70,7 +87,7 @@ export function createApocryphaMcpServer(store, options = {}) {
     "apocrypha_note",
     {
       title: "Record an Apocrypha memory",
-      description: "Append one durable piece of personal context about Jensen only when it is worth remembering but the assistant judges it is not supposed to save it in its own built-in personal memory. Do not duplicate facts eligible for ordinary memory. Do not store system state, infrastructure, repository details, or facts recoverable from documentation. Whitespace is collapsed to one line; the raw log is never edited or deleted. If a compression task is returned, complete it next with apocrypha_sleep.",
+      description: NOTE_DESCRIPTION,
       inputSchema: {
         text: normalizedMemorySchema("text").describe("One memory, at most 280 UTF-8 bytes after whitespace normalization."),
       },
@@ -93,7 +110,7 @@ export function createApocryphaMcpServer(store, options = {}) {
     "apocrypha_sleep",
     {
       title: "Compress Apocrypha",
-      description: "With no arguments, return the next required binary-tree compression. With both range and summary, save that exact block once and return the next task. Keep what has lasting effect, drop what does not, and invent nothing. Continue until it says Nothing left to compress.",
+      description: SLEEP_DESCRIPTION,
       inputSchema: {
         range: z.string().optional().describe("Inclusive aligned block range copied from the task, for example 16-31."),
         summary: normalizedMemorySchema("summary").optional().describe("Faithful one-line summary, at most 280 UTF-8 bytes after whitespace normalization."),
@@ -128,4 +145,4 @@ export function createApocryphaMcpServer(store, options = {}) {
   return server;
 }
 
-export { WAKE_DESCRIPTION };
+export { WAKE_DESCRIPTION, NOTE_DESCRIPTION, SLEEP_DESCRIPTION };

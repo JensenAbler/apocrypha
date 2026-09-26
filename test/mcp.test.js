@@ -7,7 +7,7 @@ import test from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
-import { createApocryphaMcpServer, WAKE_DESCRIPTION } from "../src/mcp.js";
+import { createApocryphaMcpServer, NOTE_DESCRIPTION, SLEEP_DESCRIPTION, WAKE_DESCRIPTION } from "../src/mcp.js";
 import { ApocryphaStore } from "../src/storage.js";
 
 test("MCP exposes five portable tools and rejects a 400-character note", async () => {
@@ -30,11 +30,17 @@ test("MCP exposes five portable tools and rejects a 400-character note", async (
     const noteTool = listed.tools.find((tool) => tool.name === "apocrypha_note");
     assert.equal(wake.description, WAKE_DESCRIPTION);
     assert.equal(wake.annotations.readOnlyHint, true);
-    assert.match(noteTool.description, /not supposed to save/);
-    assert.match(noteTool.description, /Do not duplicate/);
+    assert.doesNotMatch(wake.description, /mandatory|must call|before answering/i);
+    assert.match(wake.description, /Claude and ChatGPT/);
+    assert.equal(noteTool.description, NOTE_DESCRIPTION);
+    assert.match(noteTool.description, /barred from storing/);
+    assert.match(noteTool.description, /only if labeled as yours/);
+    assert.match(noteTool.description, /Never store ID or account numbers/);
     assert.match(noteTool.description, /Do not store system state/);
     const sleepTool = listed.tools.find((tool) => tool.name === "apocrypha_sleep");
+    assert.equal(sleepTool.description, SLEEP_DESCRIPTION);
     assert.match(sleepTool.description, /Keep what has lasting effect, drop what does not, and invent nothing/);
+    assert.match(sleepTool.description, /never turn an inference into a plain fact/);
     assert.doesNotMatch(sleepTool.description, /standing directives/i);
 
     const multibyte = await client.callTool({ name: "apocrypha_note", arguments: { text: "—".repeat(94) } });
