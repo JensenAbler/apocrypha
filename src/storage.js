@@ -16,7 +16,8 @@ function byteLength(text) {
 }
 
 function plural(count, word) {
-  return `${count} ${word}${count === 1 ? "" : "s"}`;
+  if (count === 1) return `${count} ${word}`;
+  return `${count} ${word.endsWith("y") ? `${word.slice(0, -1)}ies` : `${word}s`}`;
 }
 
 export function today(timeZone = process.env.APOCRYPHA_TIME_ZONE || "America/Los_Angeles") {
@@ -95,7 +96,7 @@ export function parseRange(value) {
   const lo = Number(match[1]);
   const hi = Number(match[2]) + 1;
   const size = hi - lo;
-  if (size < 2 || (size & (size - 1)) !== 0 || lo % size !== 0) {
+  if (!Number.isSafeInteger(lo) || !Number.isSafeInteger(hi) || size < 2 || (BigInt(size) & (BigInt(size) - 1n)) !== 0n || lo % size !== 0) {
     throw new Error(`${value} is not an aligned power-of-two block.`);
   }
   return [lo, hi];
@@ -311,7 +312,8 @@ export class ApocryphaStore {
     return `${range} saved.\n${following ?? "Nothing left to compress."}`;
   }
 
-  wake({ part = 1, snapshot } = {}) {
+  wake({ part = 1, snapshot, vendor } = {}) {
+    if (vendor !== undefined && !["claude", "chatgpt"].includes(vendor)) throw new Error("Invalid wake vendor.");
     const now = this.count();
     const total = snapshot ?? now;
     if (!Number.isSafeInteger(part) || part < 1) throw new Error("part must be a positive integer.");
@@ -325,12 +327,7 @@ export class ApocryphaStore {
         `Complete them first.\n\n${task}`,
       );
     }
-    const preamble = [
-      "Every line below is a stated fact from Jensen.",
-      "This context is append-only; corrections appear as later lines.",
-      "Factor this context into advice. Do not treat it as a crisis, do not tiptoe, and do not respond with resource referrals unless Jensen asks.",
-    ].join(" ");
-    if (total === 0) return `${preamble}\n\nNo memories yet. You are awake.`;
+    if (total === 0) return "Apocrypha, oldest first (0 memories).\nNo memories yet. You are awake.";
     const lines = cover(total).map(([lo, hi]) => {
       if (hi - lo === 1) return this.get(lo);
       const summary = this.readBlock(lo, hi);
@@ -346,12 +343,12 @@ export class ApocryphaStore {
     if (part > pages.length) throw new Error(`No part ${part}; this wake has ${plural(pages.length, "part")}.`);
     const heading = pages.length > 1
       ? `Apocrypha, part ${part} of ${pages.length}, oldest first (${plural(total, "memory")}).`
-      : "Apocrypha, oldest first.";
+      : `Apocrypha, oldest first (${plural(total, "memory")}).`;
     const body = pages[part - 1].join("\n");
     const footer = part < pages.length
-      ? `Not awake yet. Next command: apocrypha_wake({"part":${part + 1},"snapshot":${total}})`
+      ? `Not awake yet. Next command: apocrypha_wake(${JSON.stringify({ part: part + 1, snapshot: total, ...(vendor ? { vendor } : {}) })})`
       : "You are awake.";
-    return `${preamble}\n\n${heading}\n${body}\n${footer}`;
+    return `${heading}\n${body}\n${footer}`;
   }
 
   recall(pattern) {

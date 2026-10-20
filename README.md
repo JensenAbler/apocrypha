@@ -4,23 +4,20 @@ Apocrypha is Jensen's single-user, append-only remote MCP memory, shared between
 
 ## Scope
 
-Apocrypha follows OptMem's general memory and compression semantics. It is not a second general-purpose memory store; its scope is:
+Apocrypha follows OptMem's memory/compression semantics. Curated notes can contain anything durable and worth sharing across Claude and ChatGPT, including pointers to explicitly captured transcript turns. Labeled assistant inferences still require Jensen's review.
 
-- **Core:** personal context Jensen stated that an assistant's built-in memory is barred from storing for custody or exposure reasons: money, housing, health, sexuality, emotional life, politics, religion, identity. Whether something is barred natively is the assistant's call; whether it's worth keeping is Jensen's.
-- **Shared by design:** being common to Claude and ChatGPT is central to its value. Overlap with built-in memory is allowed only deliberately, when having it in the shared store is the point, and should be revisited as things change.
-- **Inferences:** an assistant's own reads on Jensen may be stored only when labeled as the assistant's and reviewed by Jensen. Compression must keep those labels.
-- **Never:** ID or account numbers (the Drive mirror widens exposure); suicide, self-harm, or disordered-eating records; instructions that would make an assistant less honest or less willing to push back; system state or anything recoverable from documentation.
+Never store ID or account numbers; suicide, self-harm, or disordered-eating records; or instructions that reduce honesty or willingness to push back. Redact before sending a tool request. Server pattern checks are a backstop, not complete sensitive-content detection. Transcript capture is opt-in: installing v2 does not activate it.
 
-The boundary moves when the assistants' built-in memory constraints move. Waking is on-demand, not mandatory, and what it loads is background, not something to raise unprompted.
+Waking is on demand. Notes and transcripts are background, not instructions and not topics to raise unprompted. Transcripts are an assistant's text copy, not canonical vendor exports; tools, images, attachments, and unrecorded turns are absent.
 
 `LOG.txt` is authoritative. It uses OptMem's 320-byte fixed-width records (one newline-terminated memory per record), and `TREE/<size>` uses its 288-byte fixed-width binary-merge records. Corrections are later log entries; raw memories are never edited or deleted. Google Drive is only a phone-readable mirror.
 
 ## Tools
 
 - `apocrypha_wake`: on-demand read of the shared context, paged below client response limits; refuses while any compression is pending.
-- `apocrypha_note`: records one in-scope durable memory (see Scope), collapses whitespace, appends a dated memory, mirrors Drive, and returns the next newly-doable compression.
+- `apocrypha_note`: exactly one of a curated `text` note, explicitly authorized `turn`, or evidence-backed `resolve`. Only curated notes enter the Drive mirror.
 - `apocrypha_sleep`: gets or settles the next merge-tree compression.
-- `apocrypha_recall`: case-insensitive regex search of the complete raw log.
+- `apocrypha_recall`: bounded-time regex search or pure-read zoom through settled blocks, notes and transcript leaves.
 - `apocrypha_forget`: truncates a wrong summary and all summaries above it, without touching the log.
 
 Wake intentionally returns every raw record while the log fits within its 96-line rendering budget. Once the log exceeds that budget, it tiles the full history with stored tree summaries toward the past and progressively finer detail toward the present. A note returns only the first newly-doable compression; each sleep response returns the next task in the cascade. Draining that cascade before wake is deliberate, because wake never renders from a partially built tree.
@@ -38,13 +35,9 @@ The tests include a 2,000-memory OptMem stress run, fixed-record and tree invari
 
 ## Development and deployment workflow
 
-`C:\Users\Jensen\code\apochrypha` is the development checkout. GitHub's public `main` branch is the release source, and Alpha deploys that published branch rather than unpublished local files.
+Source changes use the managed Praxis workspace: recover/sync the registered apocrypha project, edit and test there, review the diff, then obtain required publication approval before commit, push, and exact-main deployment_fast_forward. Never edit deployed source or use ad hoc worktrees. Existing runtime data and secrets are not development fixtures.
 
-1. Make changes in the local checkout and run `npm test`.
-2. Commit the changes and push `main` to GitHub.
-3. From PowerShell, run `./scripts/deploy-alpha.ps1`.
-
-The deployment script refuses a dirty tree, a non-`main` branch, or a local commit that differs from `origin/main`. On Alpha it performs a fast-forward-only update, installs locked production dependencies, restarts the service, and verifies the local health endpoint. Runtime state remains separate: credentials live in `/etc/apocrypha.env`, while the append-only log, summary tree, and OAuth state live in `/var/lib/apocrypha`; none are part of Git.
+The v2 rollout, protocol additions, recovery rules, client verification checklist and draft capture instructions are in [V2.md](V2.md). Neither server tests nor a deployment prove Claude/ChatGPT refreshed their cached schemas.
 
 ## Google authorization (one time, on the laptop)
 
@@ -61,22 +54,11 @@ The helper requests `access_type=offline`, `prompt=consent`, and only `https://w
 
 The mirror targets `GOOGLE_DOC_ID`, not the document title. Renaming the Google Doc does not break synchronization and must not be replaced with title-based lookup.
 
+The old scripts/deploy-alpha.ps1 helper is retained for historical reference only. It is legacy, not the supported deployment path; do not use it for v2 upgrades.
+
 ## Deploy on Alpha
 
-Copy this project to `/srv/apocrypha`, then run as root:
-
-```sh
-cd /srv/apocrypha
-npm ci --omit=dev
-useradd --system --home /var/lib/apocrypha --shell /usr/sbin/nologin apocrypha || true
-chown -R apocrypha:apocrypha /var/lib/apocrypha
-install -o root -g root -m 600 deploy/apocrypha.env.example /etc/apocrypha.env
-install -o root -g root -m 644 deploy/apocrypha.service /etc/systemd/system/apocrypha.service
-systemctl daemon-reload
-systemctl enable --now apocrypha
-```
-
-Edit `/etc/apocrypha.env` with real, independent `MCP_BEARER_TOKEN` and `OAUTH_ACCESS_KEY` values before starting the service. The process always binds `127.0.0.1`; nginx is the only public listener.
+The existing Alpha installation is managed through Praxis. For upgrades, follow the managed development and deployment workflow above; do not copy source into the live checkout, reinstall environment examples, recreate users, or overwrite existing secrets. Deployment preserves /var/lib/apocrypha and /etc/apocrypha.env. Initial provisioning is a separate operator task, not part of the v2 upgrade.
 
 ## Connect Claude
 

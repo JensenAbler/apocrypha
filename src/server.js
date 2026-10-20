@@ -1,5 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 
+import express from "express";
+
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { getOAuthProtectedResourceMetadataUrl, mcpAuthRouter } from "@modelcontextprotocol/sdk/server/auth/router.js";
@@ -34,6 +36,22 @@ const app = createMcpExpressApp({
   allowedHosts: ["127.0.0.1", "localhost", publicHostname],
 });
 const resourceMetadataUrl = getOAuthProtectedResourceMetadataUrl(resourceUrl);
+
+// createMcpExpressApp installs express.json() with Express's 100 KB default.
+// An outer app parses first with a limit well above any client's tool-argument
+// size, so the clients' own limits, not this server's, are the binding ones.
+export const BODY_LIMIT = "16mb";
+const outer = express();
+outer.use(express.json({ limit: BODY_LIMIT }));
+outer.use((error, _req, res, next) => {
+  if (error?.type !== "entity.too.large") return next(error);
+  res.status(413).json({
+    jsonrpc: "2.0",
+    error: { code: -32600, message: `Request body exceeds Apocrypha's ${BODY_LIMIT} HTTP limit.` },
+    id: null,
+  });
+});
+outer.use(app);
 
 function authorized(header) {
   const expected = Buffer.from(`Bearer ${bearerToken}`, "utf8");
@@ -106,7 +124,7 @@ app.post("/mcp", async (req, res) => {
 app.get("/mcp", (_req, res) => res.status(405).set("Allow", "POST").send("Method Not Allowed"));
 app.delete("/mcp", (_req, res) => res.status(405).set("Allow", "POST").send("Method Not Allowed"));
 
-const listener = app.listen(port, host, () => {
+const listener = outer.listen(port, host, () => {
   console.log(`Apocrypha listening on http://${host}:${port}; ${store.count()} memories.`);
   if (!isDriveConfigured()) console.warn("Google Drive mirror is not configured.");
 });

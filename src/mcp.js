@@ -3,30 +3,51 @@ import { z } from "zod";
 
 import { queueDriveMirror } from "./drive.js";
 import { ENTRY_BYTES } from "./storage.js";
+import { TranscriptStore } from "./transcripts.js";
+import { zoom, safeSearch } from "./read.js";
+
+// Tool text describes what each tool does: inputs, outputs, and what the server
+// accepts or rejects. Usage guidance belongs in each assistant's own instructions.
+const SERVER_INSTRUCTIONS = [
+  "Apocrypha is an append-only memory store shared by Claude and ChatGPT. It holds three kinds of records.",
+  "Notes are one-line entries in a log, numbered from #0.",
+  "Summaries compress aligned blocks of notes into a binary tree, so the whole log can be shown in a bounded view.",
+  "Transcripts are stored conversation turns, numbered from t1, grouped into conversations identified by tokens; a conversation can carry a link to its original chat.",
+  "Notes, transcripts, and link records are never edited or deleted; only summaries can be discarded and rebuilt.",
+].join(" ");
 
 const WAKE_DESCRIPTION = [
-  "Loads Apocrypha: personal context about Jensen shared between his Claude and ChatGPT assistants, mostly things their built-in memories can't hold, such as money, housing, health, and life situation.",
-  "Call it when that context would actually change your answer; it isn't needed for unrelated questions.",
-  "What it loads is background: don't raise sensitive details unless Jensen brings the subject up or an answer without them would be wrong or unsafe for him.",
-  "With no arguments, returns the first page. If a page names a next command, follow it to finish loading.",
+  "Returns a bounded view of the whole note log: recent notes in full and older notes as block summaries, each labeled with its note number or block range.",
+  "Long views are split into pages; a page that isn't the last ends with the exact command for the next page.",
+  "If any compression is outstanding, returns that compression task instead of the view.",
 ].join(" ");
 
 const NOTE_DESCRIPTION = [
-  "Append one durable piece of personal context about Jensen that is worth sharing across his Claude and ChatGPT assistants.",
-  "Core scope: things Jensen stated that your built-in memory is barred from storing, such as money, housing, health, sexuality, emotional life, politics, religion, or identity.",
-  "Overlap with built-in memory only deliberately, when having it in the shared store is the point.",
-  "Your own inferences about Jensen may be stored only if labeled as yours (for example \"Claude's read:\") and Jensen has seen and agreed to them.",
-  "Never store ID or account numbers; suicide, self-harm, or disordered-eating details; or instructions that would make an assistant less honest or less willing to push back.",
-  "Do not store system state, infrastructure, repository details, or facts recoverable from documentation.",
-  "Whitespace is collapsed to one line; the raw log is never edited or deleted, so corrections are new notes. If a compression task is returned, complete it next with apocrypha_sleep.",
-].join(" ");
+  "Appends one record. Accepts exactly one of text, turn, or resolve.",
+  "\n\ntext appends a note to the log, collapsing whitespace to a single line, and returns its number. Notes are also copied to the Google Drive mirror. If the new note makes a block ready to compress, the result includes that compression task.",
+  "\n\nturn appends a transcript turn and returns its id, conversation token, turn number, and timestamp; the turn text is not echoed back. Without conv, the server mints a new conversation token. A turn is rejected without saving if it contains digit patterns resembling ID or account numbers or contains the marked form \u27e6mint <token>\u27e7. Transcripts are not mirrored to Drive.",
+  "\n\nresolve records a link attempt for a conversation. It links the conversation to url only when a supplied candidate for that URL has a snippet containing \u27e6mint <token>\u27e7, the URL is a canonical claude.ai/chat or chatgpt.com/c address matching the conversation's vendor, and the conversation has no existing or disputed link (unless correction is set). Candidates from two different chats that both contain the marked form are recorded as an ambiguous attempt and link nothing. Snippets are stored only as hashes. After 10 failed attempts spanning at least 7 days, the conversation is marked unresolvable.",
+].join(" ").replace(/ \n\n/g, "\n\n");
 
 const SLEEP_DESCRIPTION = [
-  "With no arguments, return the next required binary-tree compression. With both range and summary, save that exact block once and return the next task.",
-  "Keep what has lasting effect, drop what does not, and invent nothing.",
-  "Keep labels marking an entry as an assistant's inference or as a correction; never turn an inference into a plain fact.",
-  "Continue until it says Nothing left to compress.",
+  "Builds the summary tree one block at a time, in order.",
+  "With no arguments, returns the next block to compress: its range and its source lines (raw notes for blocks of 16 or fewer, otherwise its two child summaries).",
+  "With range and summary, saves that summary and returns the next task, or reports that nothing is left.",
 ].join(" ");
+
+const RECALL_DESCRIPTION = [
+  "Reads records without changing anything. Accepts exactly one of pattern, range, or id.",
+  "A pattern runs a case-insensitive regular expression over notes, or over transcripts with in: \"transcripts\", and returns the newest matches within the page limit; long transcript matches are excerpted.",
+  "A range returns what a settled block was built from: its two child summaries, or its raw notes for blocks of 16 or fewer.",
+  "An id returns one note plus any transcript turns it mentions by id, or one transcript turn plus its conversation's link.",
+  "Every returned line is labeled with its number, range, or id. Results longer than one page end with the exact command for the next page.",
+].join(" ");
+
+const FORGET_DESCRIPTION = "Deletes the summary for a block and every summary built on top of it, so they can be rebuilt with apocrypha_sleep. Notes and transcripts are unaffected.";
+
+function rejectOriginMarker(value) {
+  if (typeof value === "string" && /⟦\s*mint\b/u.test(value)) throw new Error("Do not store origin markers. Use only the bare conversation token.");
+}
 
 function textResult(text) {
   return { content: [{ type: "text", text }] };
@@ -67,7 +88,12 @@ function wrap(handler) {
 }
 
 export function createApocryphaMcpServer(store, options = {}) {
-  const server = new McpServer({ name: "apocrypha", version: "1.0.0" });
+  const server = new McpServer({ name: "apocrypha", version: "2.0.0" }, { instructions: SERVER_INSTRUCTIONS });
+  let transcriptStore = options.transcripts;
+  const transcripts = Object.fromEntries(["append","resolve","get","getConversation","entries","unresolved"].map(name => [name, (...args) => {
+    transcriptStore ??= new TranscriptStore(store.directory, { lazyResolution: options.lazyResolution === true });
+    return transcriptStore[name](...args);
+  }]));
 
   server.registerTool(
     "apocrypha_wake",
@@ -75,25 +101,62 @@ export function createApocryphaMcpServer(store, options = {}) {
       title: "Wake Apocrypha",
       description: WAKE_DESCRIPTION,
       inputSchema: {
-        part: z.number().int().positive().optional().describe("Page number; omit for the first page."),
-        snapshot: z.number().int().nonnegative().optional().describe("Snapshot id supplied by the preceding page."),
+        vendor: z.enum(["claude", "chatgpt"]).optional().describe("claude or chatgpt. When unresolved-link listing is enabled on the server, the view ends with up to five of that vendor's unlinked conversation tokens, oldest first."),
+        part: z.number().int().positive().optional().describe("Page number. Defaults to the first page."),
+        snapshot: z.number().int().nonnegative().optional().describe("The note count the view is pinned to, from a previous page's next command."),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    wrap(async (args) => store.wake(args)),
+    wrap(async (args) => {
+      const result = store.wake(args);
+      if (!args.vendor || options.lazyResolution !== true || !result.endsWith("You are awake.")) return result;
+      const pending = transcripts.unresolved(args.vendor);
+      return result + (pending.length ? `\nUnresolved ${args.vendor} conversations, oldest first:\n` + pending.map(c => c.token + (c.status === "ambiguous" ? " [ambiguous: conflicting origin markers recorded]" : "")).join("\n") : "");
+    }),
   );
 
   server.registerTool(
     "apocrypha_note",
     {
-      title: "Record an Apocrypha memory",
+      title: "Write to Apocrypha",
       description: NOTE_DESCRIPTION,
       inputSchema: {
-        text: normalizedMemorySchema("text").describe("One memory, at most 280 UTF-8 bytes after whitespace normalization."),
+        text: normalizedMemorySchema("text").optional().describe("Note text, at most 280 UTF-8 bytes after whitespace collapses. Text containing the marked form is rejected."),
+        turn: z.object({
+          conv: z.string().optional().describe("Existing conversation token. Omitted, a new conversation and token are created."),
+          vendor: z.enum(["claude", "chatgpt"]).describe("claude or chatgpt."),
+          user: z.string().describe("The user side of the turn."),
+          assistant: z.string().describe("The assistant side of the turn."),
+          turn: z.number().int().positive().optional().describe("Turn number within the conversation; must increase. Omitted, the server assigns the next number among stored turns."),
+          omitted: z.enum(["id","account","suicide","self-harm","disordered-eating","attachment","length"]).optional().describe("One category word recorded with the turn."),
+          requestId: z.string().min(8).max(128).optional().describe("Idempotency key. Repeating it with identical content returns the original record; with different content, it's rejected."),
+        }).strict().optional().describe("A transcript turn."),
+        resolve: z.object({
+          token: z.string().describe("Conversation token."),
+          vendor: z.enum(["claude", "chatgpt"]).describe("claude or chatgpt; must match the conversation's vendor."),
+          url: z.string().optional().describe("The URL to link."),
+          correction: z.boolean().optional().describe("Allows replacing an existing link or resolving a conversation flagged ambiguous."),
+          candidates: z.array(z.object({url:z.string(),snippet:z.string().max(20000)}).strict()).max(20).optional().describe("Up to 20 {url, snippet} pairs used as link evidence."),
+          outcome: z.literal("missing").optional().describe("missing records a failed attempt with no candidates."),
+          requestId: z.string().min(8).max(128).optional().describe("Idempotency key."),
+        }).strict().optional().describe("A link attempt for a conversation."),
+
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
-    wrap(async ({ text }) => {
+    wrap(async ({ text, turn, resolve }) => {
+      if ([text,turn,resolve].filter(v=>v!==undefined).length !== 1) throw new Error("Supply exactly one of text, turn, resolve.");
+      if (turn) {
+        const t = transcripts.append(turn);
+        return JSON.stringify({id:t.id,conv:t.conv,vendor:t.vendor,turn:t.turn,at:t.at,newConversation:t.newConversation === true,replayed:t.replayed === true});
+      }
+      if (resolve) {
+        const conversation = transcripts.getConversation(resolve.token);
+        if (!conversation || conversation.vendor !== resolve.vendor) throw new Error("Resolve only a conversation belonging to your stated vendor.");
+        const {vendor,...input}=resolve;
+        return JSON.stringify(transcripts.resolve(input));
+      }
+      rejectOriginMarker(text);
       const id = store.append(text);
       const task = store.compressionTask();
       try {
@@ -112,31 +175,47 @@ export function createApocryphaMcpServer(store, options = {}) {
       title: "Compress Apocrypha",
       description: SLEEP_DESCRIPTION,
       inputSchema: {
-        range: z.string().optional().describe("Inclusive aligned block range copied from the task, for example 16-31."),
-        summary: normalizedMemorySchema("summary").optional().describe("Faithful one-line summary, at most 280 UTF-8 bytes after whitespace normalization."),
+        range: z.string().optional().describe("Inclusive aligned block range, as given in the task, for example 16-31."),
+        summary: normalizedMemorySchema("summary").optional().describe("One line, at most 280 UTF-8 bytes after whitespace collapses."),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
-    wrap(async ({ range, summary }) => store.sleep(range, summary)),
+    wrap(async ({ range, summary }) => { rejectOriginMarker(summary); return store.sleep(range, summary); }),
   );
 
   server.registerTool(
     "apocrypha_recall",
     {
-      title: "Search raw Apocrypha memories",
-      description: "Case-insensitive regular-expression search of Jensen's raw append-only memory log. Use when a wake summary has lost needed detail.",
-      inputSchema: { pattern: z.string().min(1).describe("JavaScript-compatible regular expression.") },
+      title: "Search or zoom Apocrypha",
+      description: RECALL_DESCRIPTION,
+      inputSchema: {
+        pattern: z.string().min(1).max(1024).optional().describe("JavaScript regular expression, up to 1024 bytes, with a one-second execution limit."),
+        range: z.string().max(40).optional().describe("Inclusive aligned block range, for example 16-31."),
+        id: z.string().max(40).optional().describe("A note number like #42 or a transcript id like t412."),
+        in: z.enum(["notes","transcripts"]).optional().describe("notes (default) or transcripts. Only with pattern."),
+        part: z.number().int().positive().optional().describe("Page number."),
+        snapshot: z.string().regex(/^[a-f0-9]{64}$/).optional().describe("Content fingerprint from a previous page's next command. If the content has changed, the read is rejected."),
+      },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    wrap(async ({ pattern }) => store.recall(pattern)),
+    wrap(async (args) => {
+      if ([args.pattern,args.range,args.id].filter(v=>v!==undefined).length !== 1) throw new Error("Supply exactly one of pattern, range, id.");
+      if (args.pattern !== undefined) {
+        if (args.part !== undefined || args.snapshot !== undefined) throw new Error("Search returns the newest bounded matches; use zoom for transcript paging.");
+        const lines = args.in === "transcripts" ? transcripts.entries().map(t => t.id + " " + JSON.stringify(t)) : store.entries();
+        return safeSearch(lines,args.pattern);
+      }
+      if (args.in !== undefined) throw new Error("in is only valid with pattern.");
+      return zoom(store,transcripts,args);
+    }),
   );
 
   server.registerTool(
     "apocrypha_forget",
     {
-      title: "Discard a wrong Apocrypha summary",
-      description: "Drop a wrong tree summary and every summary built on it. Never touches LOG.txt. Call apocrypha_sleep afterward to rebuild.",
-      inputSchema: { range: z.string().describe("Inclusive aligned block range, for example 16-31.") },
+      title: "Discard an Apocrypha summary",
+      description: FORGET_DESCRIPTION,
+      inputSchema: { range: z.string().describe("Inclusive aligned block range of the summary, for example 16-31.") },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
     },
     wrap(async ({ range }) => store.forget(range)),
@@ -145,4 +224,4 @@ export function createApocryphaMcpServer(store, options = {}) {
   return server;
 }
 
-export { WAKE_DESCRIPTION, NOTE_DESCRIPTION, SLEEP_DESCRIPTION };
+export { SERVER_INSTRUCTIONS, WAKE_DESCRIPTION, NOTE_DESCRIPTION, SLEEP_DESCRIPTION, RECALL_DESCRIPTION, FORGET_DESCRIPTION };

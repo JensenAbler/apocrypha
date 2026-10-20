@@ -1,3 +1,5 @@
+# LEGACY: historical manual deployment helper. Do not use for current upgrades.
+# Use the managed Praxis workspace/review/commit/push/deployment workflow in README.md.
 param(
   [string]$AlphaHost = "31.97.135.128",
   [string]$IdentityFile = "$env:USERPROFILE\.ssh\alphaclawd"

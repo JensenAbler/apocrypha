@@ -30,18 +30,19 @@ test("MCP exposes five portable tools and rejects a 400-character note", async (
     const noteTool = listed.tools.find((tool) => tool.name === "apocrypha_note");
     assert.equal(wake.description, WAKE_DESCRIPTION);
     assert.equal(wake.annotations.readOnlyHint, true);
-    assert.doesNotMatch(wake.description, /mandatory|must call|before answering/i);
-    assert.match(wake.description, /Claude and ChatGPT/);
     assert.equal(noteTool.description, NOTE_DESCRIPTION);
-    assert.match(noteTool.description, /barred from storing/);
-    assert.match(noteTool.description, /only if labeled as yours/);
-    assert.match(noteTool.description, /Never store ID or account numbers/);
-    assert.match(noteTool.description, /Do not store system state/);
     const sleepTool = listed.tools.find((tool) => tool.name === "apocrypha_sleep");
     assert.equal(sleepTool.description, SLEEP_DESCRIPTION);
-    assert.match(sleepTool.description, /Keep what has lasting effect, drop what does not, and invent nothing/);
-    assert.match(sleepTool.description, /never turn an inference into a plain fact/);
-    assert.doesNotMatch(sleepTool.description, /standing directives/i);
+    assert.match(client.getInstructions(), /shared by Claude and ChatGPT/);
+    // Tool text is descriptive only: no usage directives aimed at the model.
+    const prescriptive = /\b(should|must call|before answering|don't|do not|never store|Jensen)\b/i;
+    for (const tool of listed.tools) {
+      assert.doesNotMatch(tool.description, prescriptive, tool.name);
+      for (const [key, schema] of Object.entries(tool.inputSchema.properties || {})) {
+        if (schema.description) assert.doesNotMatch(schema.description, prescriptive, `${tool.name}.${key}`);
+      }
+    }
+    assert.doesNotMatch(client.getInstructions(), prescriptive);
 
     const multibyte = await client.callTool({ name: "apocrypha_note", arguments: { text: "—".repeat(94) } });
     assert.equal(multibyte.isError, true);
