@@ -34,7 +34,7 @@ const NOTE_DESCRIPTION = [
   CAPTURE_INSTRUCTION,
   "\n\nAppends one record. Accepts exactly one of text, turn, or resolve.",
   "\n\ntext appends a note to the log, collapsing whitespace to a single line, and returns its number. Notes are also copied to the Google Drive mirror. If the new note makes a block ready to compress, the result includes that compression task.",
-  "\n\nturn appends a transcript turn and returns its id, conversation token, turn number, and timestamp; the turn text is not echoed back. Without conv, the server mints a new conversation token. A turn is rejected without saving if it contains digit patterns resembling ID or account numbers or contains the marked form \u27e6mint <token>\u27e7. Transcripts are not mirrored to Drive.",
+  "\n\nturn appends a transcript turn and returns its id, conversation token, turn number, and timestamp; the turn text is not echoed back. Without conv, the server mints a new conversation token. A turn is rejected without saving if it contains the marked form \u27e6mint <token>\u27e7. Transcripts are not mirrored to Drive.",
   "\n\nresolve records a link attempt for a conversation. It links the conversation to url only when a supplied candidate for that URL has a snippet containing \u27e6mint <token>\u27e7, the URL is a canonical claude.ai/chat or chatgpt.com/c address matching the conversation's vendor, and the conversation has no existing or disputed link (unless correction is set). Candidates from two different chats that both contain the marked form are recorded as an ambiguous attempt and link nothing. Snippets are stored only as hashes. After 10 failed attempts spanning at least 7 days, the conversation is marked unresolvable.",
 ].join(" ").replace(/ \n\n/g, "\n\n");
 

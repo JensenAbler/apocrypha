@@ -26,7 +26,7 @@ export function assertSafeText(text) {
   const labelled = /\b(?:account|passport|license|licence|routing|social security|ssn|taxpayer|member id)\s*(?:number\b|no\.?\b|#|:)\s*[:#]?\s*([A-Z0-9][A-Z0-9-]{3,})/giu;
   if (/\b\d{3}[- ]\d{2}[- ]\d{4}\b|\b\d{9,}\b|\b(?:\d[ -]?){13,19}\b/u.test(screened) ||
       [...screened.matchAll(labelled)].some(match => /\d/.test(match[1]))) {
-    throw new Error('Possible ID or account number. Redact locally and resend; nothing was saved.');
+    throw new Error('Possible ID or account number.');
   }
 }
 
