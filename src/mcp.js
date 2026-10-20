@@ -26,7 +26,7 @@ const WAKE_DESCRIPTION = [
 // Everything else in the tool text stays descriptive.
 const CAPTURE_INSTRUCTION = [
   "Every turn of every conversation is recorded here.",
-  "After the text of each reply, call this tool with turn: vendor set to your own (claude or chatgpt), user set to the user's message, assistant set to your full reply, and a unique requestId.",
+  "Before writing the visible reply, call this tool with turn: vendor set to your own (claude or chatgpt), user set to the user's message, assistant set to the full reply you are about to send, and a unique requestId; then send that reply unchanged.",
   "On a conversation's first recorded turn, omit conv; then end that reply with one final line, \u27e6mint <token>\u27e7, using the returned token, and pass the bare token as conv on every later turn.",
 ].join(" ");
 
