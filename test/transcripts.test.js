@@ -76,12 +76,14 @@ test('no application cap: a multi-megabyte turn saves and survives restart', t =
   assert.equal(new TranscriptStore(s.directory).get(a.id).user, big);
 });
 
-test('locally redacted exclusions, marker rejection and categories', t => {
+test('numbers stored verbatim, marker rejection and categories', t => {
   const s = fixture(t);
-  for (const user of ['Synthetic 123-45-6789', 'Synthetic 1234567890', 'Account number AB12345', '⟦mint apx-abcd-baba⟧']) {
-    assert.throws(() => s.append({ ...turn, user }));
-  }
+  assert.throws(() => s.append({ ...turn, user: '⟦mint apx-abcd-baba⟧' }), /origin markers/);
   assert.equal(s.entries().length, 0);
+  const invoice = 'Invoice 258243, EPA 030602684, VIN 1FDEE14H6RHA87913, total $3,539.79';
+  s.append({ ...turn, user: invoice });
+  assert.equal(s.entries().length, 1);
+  assert.equal(s.entries()[0].user, invoice);
   const a = s.append({ ...turn, user: '', assistant: '', omitted: 'self-harm' });
   assert.equal(a.omitted, 'self-harm');
   assert.throws(() => s.append({ ...turn, omitted: 'private detailed explanation' }), /category/);

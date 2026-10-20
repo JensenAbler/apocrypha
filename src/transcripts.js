@@ -15,19 +15,9 @@ const canonical = value => JSON.stringify(value);
 
 export function assertSafeText(text) {
   if (typeof text !== 'string') throw new Error('Transcript text must be a string.');
+  // Turn text is stored verbatim, numbers included. The only content rule is
+  // the origin marker, which must never be copied into the log.
   if (/⟦\s*mint\b/u.test(text)) throw new Error('Do not store origin markers. Resend with only the bare conversation token.');
-  // UUID chat IDs are provenance, not inferred financial/government identifiers.
-  let screened = text.replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/giu, '[chat-id]');
-  screened = screened.replace(/\b(\d{4})-(\d{2})-(\d{2})\b/gu, (value, y, m, d) => {
-    const date = new Date(`${value}T00:00:00Z`);
-    return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value ? '[date]' : value;
-  });
-  // A bare word such as "account" next to a year is not identifier evidence.
-  const labelled = /\b(?:account|passport|license|licence|routing|social security|ssn|taxpayer|member id)\s*(?:number\b|no\.?\b|#|:)\s*[:#]?\s*([A-Z0-9][A-Z0-9-]{3,})/giu;
-  if (/\b\d{3}[- ]\d{2}[- ]\d{4}\b|\b\d{9,}\b|\b(?:\d[ -]?){13,19}\b/u.test(screened) ||
-      [...screened.matchAll(labelled)].some(match => /\d/.test(match[1]))) {
-    throw new Error('Possible ID or account number.');
-  }
 }
 
 export const assertAllowedText = assertSafeText;

@@ -108,7 +108,7 @@ test('killed-writer recovery does not truncate partial transcript bytes', async 
   assert.equal(fs.readFileSync(s.turnFile, 'utf8'), '{partial');
 });
 
-test('dates and year context do not become inferred identifiers; real patterns still reject', () => {
-  for (const text of ['2026-10-20', '2026-10-20 2026-10-21', '2024-02-29 2026-10-20 2026-10-21', 'account 2026 snapshot', 'The account settings were reviewed.']) assert.doesNotThrow(() => assertAllowedText(text));
-  for (const text of ['Account number AB12345', 'Account # AB12345', 'Account: AB12345', 'SSN: 123-45-6789', 'Synthetic 4111 1111 1111 1111', 'Synthetic 1234567890']) assert.throws(() => assertAllowedText(text), /Possible ID/);
+test('numbers of every shape are allowed; only origin markers reject', () => {
+  for (const text of ['2026-10-20', 'account 2026 snapshot', 'Account number AB12345', 'SSN: 123-45-6789', 'Synthetic 4111 1111 1111 1111', 'Synthetic 1234567890', 'EPA 030602684, VIN 1FDEE14H6RHA87913, +1 323-793-1678']) assert.doesNotThrow(() => assertAllowedText(text));
+  assert.throws(() => assertAllowedText('⟦mint apx-abcd-baba⟧'), /origin markers/);
 });
