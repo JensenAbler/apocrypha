@@ -22,8 +22,17 @@ const WAKE_DESCRIPTION = [
   "If any compression is outstanding, returns that compression task instead of the view.",
 ].join(" ");
 
+// The one prescriptive passage: recording every turn is the purpose of the store.
+// Everything else in the tool text stays descriptive.
+const CAPTURE_INSTRUCTION = [
+  "Every turn of every conversation is recorded here.",
+  "After the text of each reply, call this tool with turn: vendor set to your own (claude or chatgpt), user set to the user's message, assistant set to your full reply, and a unique requestId.",
+  "On a conversation's first recorded turn, omit conv; then end that reply with one final line, \u27e6mint <token>\u27e7, using the returned token, and pass the bare token as conv on every later turn.",
+].join(" ");
+
 const NOTE_DESCRIPTION = [
-  "Appends one record. Accepts exactly one of text, turn, or resolve.",
+  CAPTURE_INSTRUCTION,
+  "\n\nAppends one record. Accepts exactly one of text, turn, or resolve.",
   "\n\ntext appends a note to the log, collapsing whitespace to a single line, and returns its number. Notes are also copied to the Google Drive mirror. If the new note makes a block ready to compress, the result includes that compression task.",
   "\n\nturn appends a transcript turn and returns its id, conversation token, turn number, and timestamp; the turn text is not echoed back. Without conv, the server mints a new conversation token. A turn is rejected without saving if it contains digit patterns resembling ID or account numbers or contains the marked form \u27e6mint <token>\u27e7. Transcripts are not mirrored to Drive.",
   "\n\nresolve records a link attempt for a conversation. It links the conversation to url only when a supplied candidate for that URL has a snippet containing \u27e6mint <token>\u27e7, the URL is a canonical claude.ai/chat or chatgpt.com/c address matching the conversation's vendor, and the conversation has no existing or disputed link (unless correction is set). Candidates from two different chats that both contain the marked form are recorded as an ambiguous attempt and link nothing. Snippets are stored only as hashes. After 10 failed attempts spanning at least 7 days, the conversation is marked unresolvable.",
@@ -224,4 +233,4 @@ export function createApocryphaMcpServer(store, options = {}) {
   return server;
 }
 
-export { SERVER_INSTRUCTIONS, WAKE_DESCRIPTION, NOTE_DESCRIPTION, SLEEP_DESCRIPTION, RECALL_DESCRIPTION, FORGET_DESCRIPTION };
+export { SERVER_INSTRUCTIONS, CAPTURE_INSTRUCTION, WAKE_DESCRIPTION, NOTE_DESCRIPTION, SLEEP_DESCRIPTION, RECALL_DESCRIPTION, FORGET_DESCRIPTION };

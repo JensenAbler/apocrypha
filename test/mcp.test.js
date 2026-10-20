@@ -7,7 +7,7 @@ import test from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
-import { createApocryphaMcpServer, NOTE_DESCRIPTION, SLEEP_DESCRIPTION, WAKE_DESCRIPTION } from "../src/mcp.js";
+import { createApocryphaMcpServer, CAPTURE_INSTRUCTION, NOTE_DESCRIPTION, SLEEP_DESCRIPTION, WAKE_DESCRIPTION } from "../src/mcp.js";
 import { ApocryphaStore } from "../src/storage.js";
 
 test("MCP exposes five portable tools and rejects a 400-character note", async () => {
@@ -36,6 +36,14 @@ test("MCP exposes five portable tools and rejects a 400-character note", async (
     assert.match(client.getInstructions(), /shared by Claude and ChatGPT/);
     // Tool text is descriptive only: no usage directives aimed at the model.
     const prescriptive = /\b(should|must call|before answering|don't|do not|never store|Jensen)\b/i;
+    // The capture instruction is the single prescriptive passage, and it opens the note tool.
+    assert.ok(noteTool.description.startsWith(CAPTURE_INSTRUCTION));
+    const directive = /call this tool|each reply|every later turn/i;
+    for (const tool of listed.tools) {
+      const rest = tool.name === "apocrypha_note" ? tool.description.replace(CAPTURE_INSTRUCTION, "") : tool.description;
+      assert.doesNotMatch(rest, directive, tool.name);
+    }
+    assert.doesNotMatch(client.getInstructions(), directive);
     for (const tool of listed.tools) {
       assert.doesNotMatch(tool.description, prescriptive, tool.name);
       for (const [key, schema] of Object.entries(tool.inputSchema.properties || {})) {
