@@ -212,6 +212,7 @@ export class ApocryphaStore {
   attributeLegacyLeaf(record) {
     const id = turnLeafId(record);
     if (!id) return record;
+    const generated = this.turnSummaries()[id];
     // Old leaves remain byte-for-byte in the append-only log. Only exact
     // legacy user-excerpt fallbacks receive a speaker label in read views.
     const file = path.join(this.directory, 'TRANSCRIPTS.jsonl');
@@ -232,14 +233,79 @@ export class ApocryphaStore {
       const match=/^(#\d+ \S+ )(.+)$/.exec(record);
       if (!match) return record;
       for (const backfill of [false,true]) {
-        if(match[2]===turnLeafText(turn,{backfill,legacyFallback:true})) {
-          return match[1]+turnLeafText(turn,{backfill});
+        for (const legacyFallback of [false,true]) {
+          if(match[2]===turnLeafText(turn,{backfill,legacyFallback})) {
+            return match[1]+turnLeafText(turn,{backfill,summary:generated});
+          }
         }
       }
     } catch {
       // Curated notes and existing leaves stay readable if transcripts are unavailable.
     }
     return record;
+  }
+
+  turnSummaries() {
+    const file=path.join(this.directory,'TURN_SUMMARIES.json');
+    try {
+      const stat=fs.statSync(file,{bigint:true});
+      const version=stat.ino+':'+stat.size+':'+stat.mtimeNs;
+      if(this.turnSummaryVersion!==version) {
+        const values=JSON.parse(fs.readFileSync(file,'utf8'));
+        if(!values || Array.isArray(values) || typeof values!=='object')throw new Error('Invalid turn summaries.');
+        for(const [id,value] of Object.entries(values)) {
+          if(!/^t[1-9]\d*$/.test(id) || typeof value!=='string' || /[\r\n\u2028\u2029]/u.test(value))throw new Error('Invalid turn summary.');
+          normalizeText(value);
+        }
+        this.turnSummaryValues=values;this.turnSummaryVersion=version;
+      }
+      return this.turnSummaryValues;
+    } catch(error) { if(error.code==='ENOENT')return {};throw error; }
+  }
+
+  fallbackLeaf(turn) {
+    if(turn.summary?.trim())return null;
+    for(let index=0;index<this.count();index++) {
+      const line=readRecord(this.logFile,index,LOG_RECORD_BYTES);
+      if(turnLeafId(line)!==turn.id)continue;
+      const prefix=/^(#\d+ \S+ )/.exec(line)[1];
+      for(const backfill of [false,true])for(const legacyFallback of [false,true]) {
+        if(line===prefix+turnLeafText(turn,{backfill,legacyFallback}))return {index,backfill};
+      }
+    }
+    return null;
+  }
+
+  pendingTurnSummaries(transcripts) {
+    if(!transcripts)return [];
+    const summaries=this.turnSummaries();
+    return transcripts.entries().filter(turn=>!turn.summary?.trim() && !summaries[turn.id] && this.fallbackLeaf(turn));
+  }
+
+  saveTurnSummary(turn,value) {
+    if(typeof value!=='string' || /[\r\n\u2028\u2029]/u.test(value) || /⟦\s*mint\b/u.test(value))throw new Error('Invalid turn summary.');
+    const summary=normalizeText(value);
+    return withWriterLock(this.directory,()=>{
+      const summaries=this.turnSummaries();
+      const leaf=this.fallbackLeaf(turn);
+      if(summaries[turn.id] || !leaf)return false;
+      // Invalidate and fsync ancestors BEFORE publishing the derived leaf.
+      // A crash can leave extra rebuild work, never a new leaf with stale ancestors.
+      for(let size=2;size<=this.count();size*=2) {
+        const keep=Math.floor(leaf.index/size);
+        if(this.blockCount(size)>keep) {
+          const fd=fs.openSync(this.treeFile(size),'r+');
+          try {fs.ftruncateSync(fd,keep*TREE_RECORD_BYTES);fs.fsyncSync(fd);}finally{fs.closeSync(fd);}
+        }
+      }
+      const file=path.join(this.directory,'TURN_SUMMARIES.json'),temp=file+'.tmp';
+      const fd=fs.openSync(temp,'w',0o600);
+      try {fs.writeFileSync(fd,JSON.stringify({...summaries,[turn.id]:summary})+'\n');fs.fsyncSync(fd);}finally{fs.closeSync(fd);}
+      fs.renameSync(temp,file);
+      const dir=fs.openSync(this.directory,'r');
+      try{fs.fsyncSync(dir);}finally{fs.closeSync(dir);}
+      return true;
+    });
   }
 
   entries() {
@@ -373,7 +439,7 @@ export class ApocryphaStore {
     return `${range} saved.\n${following ?? "Nothing left to compress."}`;
   }
 
-  wake({ part = 1, snapshot, vendor, allowPending = false, view } = {}) {
+  wake({ part = 1, snapshot, vendor, allowPending = false, view, pendingTurnSummaries = 0 } = {}) {
     if (vendor !== undefined && !["claude", "chatgpt"].includes(vendor)) throw new Error("Invalid wake vendor.");
     const now = this.count();
     const total = snapshot ?? now;
@@ -411,7 +477,7 @@ export class ApocryphaStore {
     const footer = part < pages.length
       ? `Not awake yet. Next command: apocrypha_wake(${JSON.stringify({ part: part + 1, snapshot: total, ...(vendor ? { vendor } : {}), ...(allowPending ? { view: fingerprint } : {}) })})`
       : "You are awake.";
-    return `${heading}${allowPending && this.pendingCount(total) ? `\nBackground compaction: ${this.pendingCount(total)} pending blocks.` : ""}\n${body}\n${footer}`;
+    return `${heading}${pendingTurnSummaries ? `\nTurn summaries: ${pendingTurnSummaries} pending; excerpts are temporary.` : ""}${allowPending && this.pendingCount(total) ? `\nBackground compaction: ${this.pendingCount(total)} pending blocks.` : ""}\n${body}\n${footer}`;
   }
 
   recall(pattern) {

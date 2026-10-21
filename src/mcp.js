@@ -35,7 +35,7 @@ const NOTE_DESCRIPTION = [
   CAPTURE_INSTRUCTION,
   "\n\nAppends one record. Accepts exactly one of text, turn, or resolve.",
   "\n\ntext appends a note to the log, collapsing whitespace to a single line, and returns its number. The Google Drive mirror renders the same wake view, including turn leaves and summaries. Without a healthy background compactor, a newly ready block is included as a compression task.",
-  "\n\nturn appends a transcript turn and returns its id, conversation token, turn number, and timestamp; the turn text is not echoed back. Without conv, the server mints a new conversation token. A turn is rejected without saving if it contains the marked form \u27e6mint <token>\u27e7. A recorded turn also appends a leaf line t<n> <vendor>: <summary> to the log. The vendor identifies the conversation assistant, not the speaker of quoted text. Missing or empty summaries use an explicitly user-attributed message excerpt; leaf text is truncated to 280 UTF-8 bytes. Turn leaves appear in wake and its Google Drive mirror.",
+  "\n\nturn appends a transcript turn and returns its id, conversation token, turn number, and timestamp; the turn text is not echoed back. Without conv, the server mints a new conversation token. A turn is rejected without saving if it contains the marked form \u27e6mint <token>\u27e7. A recorded turn also appends a leaf line t<n> <vendor>: <summary> to the log. The vendor identifies the conversation assistant, not the speaker of quoted text. Missing or empty summaries use an explicitly user-attributed message excerpt; leaf text is truncated to 280 UTF-8 bytes. A configured background compactor replaces temporary excerpts in the shared read view with summaries of both sides of the exchange, including existing excerpt leaves. Turn leaves appear in wake and its Google Drive mirror.",
   "\n\nresolve records a link attempt for a conversation. It links the conversation to url only when a supplied candidate for that URL has a snippet containing \u27e6mint <token>\u27e7, the URL is a canonical claude.ai/chat or chatgpt.com/c address matching the conversation's vendor, and the conversation has no existing or disputed link (unless correction is set). Candidates from two different chats that both contain the marked form are recorded as an ambiguous attempt and link nothing. Snippets are stored only as hashes. After 10 failed attempts spanning at least 7 days, the conversation is marked unresolvable.",
 ].join(" ").replace(/ \n\n/g, "\n\n");
 
@@ -164,7 +164,6 @@ export function createApocryphaMcpServer(store, options = {}) {
     wrap(async ({ text, turn, resolve }) => {
       if ([text,turn,resolve].filter(v=>v!==undefined).length !== 1) throw new Error("Supply exactly one of text, turn, resolve.");
       if (turn) {
-        if (options.compactor) await options.compactor.reconcile();
         const t = transcripts.append(turn);
         await mirror();
         return JSON.stringify({id:t.id,conv:t.conv,vendor:t.vendor,turn:t.turn,at:t.at,newConversation:t.newConversation === true,replayed:t.replayed === true});

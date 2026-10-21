@@ -70,7 +70,7 @@ export class BackgroundCompactor {
   status() {
     let pendingLeaves = null;
     try { pendingLeaves = this.transcripts?.missingLeaves(this.store).length ?? 0; } catch {}
-    return { mode:this.mode, configured:this.configured, running:!!this.running, pendingLeaves, pendingBlocks:this.store.pendingCount(),
+    return { mode:this.mode, configured:this.configured, running:!!this.running, pendingLeaves, pendingTurnSummaries:this.store.pendingTurnSummaries(this.transcripts).length, pendingBlocks:this.store.pendingCount(),
       backend:this.model?.lastBackend ?? null, lastFallback:this.model?.lastFallback ?? null,
       lastSuccess:this.lastSuccess, lastError:this.lastError, consecutiveFailures:this.failures,
       nextRetryAt:this.nextRetryAt ? new Date(this.nextRetryAt).toISOString() : null };
@@ -104,6 +104,17 @@ export class BackgroundCompactor {
         if (repaired.added) {
           this.logger({event:'turn_leaf_reconciliation',added:repaired.added});
           await this.onChange();
+        }
+        const turn=this.store.pendingTurnSummaries(this.transcripts)[0];
+        if(turn) {
+          const summary=validateSummary(await this.model(
+            'Summarize the complete exchange, including the user request and the assistant response or outcome. Preserve speaker attribution.\nRecorded turn '+turn.id+' '+turn.vendor+' '+turn.at+'\nUser:\n'+turn.user+'\nAssistant:\n'+turn.assistant));
+          if(this.store.saveTurnSummary(turn,summary)) {
+            this.lastSuccess=new Date(this.now()).toISOString();this.lastError=null;this.failures=0;this.nextRetryAt=0;
+            this.logger({event:'turn_summary_saved',id:turn.id,pendingTurnSummaries:this.store.pendingTurnSummaries(this.transcripts).length});
+            await this.onChange();
+          }
+          return true;
         }
         // Capture source and task atomically; the network call never holds the writer lock.
         const work = withWriterLock(this.store.directory,()=>{

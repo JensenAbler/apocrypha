@@ -1,6 +1,6 @@
 // Both MCP wake and the Google Doc use this exact rendering.
 export function wakeView(store, args = {}, compactor) {
-  return store.wake({...args, allowPending:compactor?.available === true});
+  return store.wake({...args, allowPending:compactor?.available === true, pendingTurnSummaries:store.pendingTurnSummaries(compactor?.transcripts).length});
 }
 export function completeWakeView(store, compactor) {
   const snapshot=store.count(), pages=[];

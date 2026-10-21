@@ -23,7 +23,7 @@ test('fake model drains blocks, refreshes view, and automatically rebuilds forgo
  assert.match(wakeView(store,{},c),/31 pending blocks/);
  assert.match(wakeView(store,{},c),/t32 claude:/);
  while(await c.step()){}
- assert.equal(store.pendingCount(),0);assert.equal(mirrors,31);assert.ok(c.status().lastSuccess);
+ assert.equal(store.pendingCount(),0);assert.equal(mirrors,63);assert.ok(c.status().lastSuccess);
  const log=fs.readFileSync(store.logFile);
  store.forget('0-15');while(await c.step()){}
  assert.equal(store.pendingCount(),0);assert.deepEqual(fs.readFileSync(store.logFile),log);
