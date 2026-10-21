@@ -37,7 +37,7 @@ test("MCP transcript write, note citations, full paging, own-vendor resolve and 
  assert.notEqual(result.isError,true);const saved=JSON.parse(result.content[0].text);
  assert.equal(saved.id,"t1");assert.equal(saved.assistant,undefined);
  const note=await call("note",{text:"Synthetic durable pointer; see t1"});
- assert.match(note.content[0].text,/Saved as #0/);
+ assert.match(note.content[0].text,/Saved as #1/);
  assert.equal(fs.existsSync(path.join(directory,"TRANSCRIPTS.jsonl")),true);
  const first=await call("recall",{id:"#0"});assert.match(first.content[0].text,/t1 user/);
  let page=await call("recall",{id:"t1"}),parts=1;
@@ -71,6 +71,7 @@ test("wake preserves vendor across pages and flags ambiguous origins",async t=>{
  const ts=new TranscriptStore(directory,{lazyResolution:true}),turn=ts.append({vendor:"chatgpt",user:"u",assistant:"a"});
  const candidates=["aaaaaaaa","bbbbbbbb"].map(id=>({url:"https://chatgpt.com/c/"+id+"-bbbb-cccc-dddd-eeeeeeeeeeee",snippet:"⟦mint "+turn.conv+"⟧"}));
  ts.resolve({token:turn.conv,candidates});
+ while(store.pendingCount()){const[a,b]=store.pending(undefined,1)[0];store.sleep(a+"-"+(b-1),"summary");}
  const first=await call("wake",{vendor:"chatgpt"});
  const args=JSON.parse(first.content[0].text.match(/Next command: apocrypha_wake\((.*)\)/)[1]);
  assert.equal(args.vendor,"chatgpt");

@@ -1,3 +1,4 @@
+import { completeWakeView } from "./wake-view.js";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const DOCUMENTS_URL = "https://docs.googleapis.com/v1/documents";
 
@@ -18,7 +19,7 @@ export function isDriveConfigured(config = driveConfig()) {
 }
 
 async function googleRequest(url, options, fetchImpl) {
-  const response = await fetchImpl(url, options);
+  const response = await fetchImpl(url, { signal: AbortSignal.timeout(60_000), ...options });
   if (!response.ok) {
     const body = await response.text();
     throw new Error(`Google API ${response.status}: ${body.slice(0, 1000)}`);
@@ -49,6 +50,7 @@ export async function getAccessToken(config, fetchImpl = fetch) {
 export async function mirrorToDrive(store, {
   config = driveConfig(),
   fetchImpl = fetch,
+  render = () => completeWakeView(store),
 } = {}) {
   if (!isDriveConfigured(config)) return { skipped: true };
   const accessToken = await getAccessToken(config, fetchImpl);
@@ -57,7 +59,7 @@ export async function mirrorToDrive(store, {
   const document = await googleRequest(documentUrl, { headers }, fetchImpl);
   const content = document.body?.content ?? [];
   const finalEndIndex = content.at(-1)?.endIndex ?? 1;
-  const text = store.entries().join("\n") + (store.count() ? "\n" : "");
+  const text = await render();
   const requests = [];
   // A Google Doc always keeps its terminal newline; only delete the content
   // before it, then insert the authoritative rendering at index 1.

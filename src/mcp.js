@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
+import { wakeView, completeWakeView } from "./wake-view.js";
 import { queueDriveMirror } from "./drive.js";
 import { ENTRY_BYTES } from "./storage.js";
 import { TranscriptStore } from "./transcripts.js";
@@ -17,24 +18,24 @@ const SERVER_INSTRUCTIONS = [
 ].join(" ");
 
 const WAKE_DESCRIPTION = [
-  "Returns a bounded view of the whole note log: recent notes in full and older notes as block summaries, each labeled with its note number or block range.",
+  "Returns a bounded view of the whole note log: recent notes and turn leaves in full and older notes as block summaries, each labeled with its note number or block range.",
   "Long views are split into pages; a page that isn't the last ends with the exact command for the next page.",
-  "If any compression is outstanding, returns that compression task instead of the view.",
+  "With a healthy background compactor, unfinished blocks appear as raw lines or available child summaries, with a pending-block count. Without it, outstanding compression returns the next task.",
 ].join(" ");
 
 // The one prescriptive passage: recording every turn is the purpose of the store.
 // Everything else in the tool text stays descriptive.
 const CAPTURE_INSTRUCTION = [
   "Every turn of every conversation is recorded here.",
-  "Before writing the visible reply, call this tool with turn: vendor set to your own (claude or chatgpt), user set to the user's message, assistant set to the full reply you are about to send, and a unique requestId; then send that reply unchanged.",
+  "Before writing the visible reply, call this tool with turn: vendor set to your own (claude or chatgpt), user set to the user's message, assistant set to the full reply you are about to send, summary set to a one-line description of the turn, and a unique requestId; then send that reply unchanged.",
   "On a conversation's first recorded turn, omit conv; then end that reply with one final line, \u27e6mint <token>\u27e7, using the returned token, and pass the bare token as conv on every later turn.",
 ].join(" ");
 
 const NOTE_DESCRIPTION = [
   CAPTURE_INSTRUCTION,
   "\n\nAppends one record. Accepts exactly one of text, turn, or resolve.",
-  "\n\ntext appends a note to the log, collapsing whitespace to a single line, and returns its number. Notes are also copied to the Google Drive mirror. If the new note makes a block ready to compress, the result includes that compression task.",
-  "\n\nturn appends a transcript turn and returns its id, conversation token, turn number, and timestamp; the turn text is not echoed back. Without conv, the server mints a new conversation token. A turn is rejected without saving if it contains the marked form \u27e6mint <token>\u27e7. Transcripts are not mirrored to Drive.",
+  "\n\ntext appends a note to the log, collapsing whitespace to a single line, and returns its number. The Google Drive mirror renders the same wake view, including turn leaves and summaries. Without a healthy background compactor, a newly ready block is included as a compression task.",
+  "\n\nturn appends a transcript turn and returns its id, conversation token, turn number, and timestamp; the turn text is not echoed back. Without conv, the server mints a new conversation token. A turn is rejected without saving if it contains the marked form \u27e6mint <token>\u27e7. A recorded turn also appends a leaf line t<n> <vendor>: <summary> to the log. Missing or empty summaries use a user-message excerpt; leaf text is truncated to 280 UTF-8 bytes. Turn leaves appear in wake and its Google Drive mirror.",
   "\n\nresolve records a link attempt for a conversation. It links the conversation to url only when a supplied candidate for that URL has a snippet containing \u27e6mint <token>\u27e7, the URL is a canonical claude.ai/chat or chatgpt.com/c address matching the conversation's vendor, and the conversation has no existing or disputed link (unless correction is set). Candidates from two different chats that both contain the marked form are recorded as an ambiguous attempt and link nothing. Snippets are stored only as hashes. After 10 failed attempts spanning at least 7 days, the conversation is marked unresolvable.",
 ].join(" ").replace(/ \n\n/g, "\n\n");
 
@@ -99,6 +100,11 @@ function wrap(handler) {
 export function createApocryphaMcpServer(store, options = {}) {
   const server = new McpServer({ name: "apocrypha", version: "2.0.0" }, { instructions: SERVER_INSTRUCTIONS });
   let transcriptStore = options.transcripts;
+  const mirror = async () => {
+    try { await (options.mirror ? options.mirror() : queueDriveMirror(store, { ...options.drive, render: () => completeWakeView(store, options.compactor) })); }
+    catch (error) { console.error("Drive mirror failed after write; continuing:", error.message); }
+  };
+
   const transcripts = Object.fromEntries(["append","resolve","get","getConversation","entries","unresolved"].map(name => [name, (...args) => {
     transcriptStore ??= new TranscriptStore(store.directory, { lazyResolution: options.lazyResolution === true });
     return transcriptStore[name](...args);
@@ -112,12 +118,13 @@ export function createApocryphaMcpServer(store, options = {}) {
       inputSchema: {
         vendor: z.enum(["claude", "chatgpt"]).optional().describe("claude or chatgpt. When unresolved-link listing is enabled on the server, the view ends with up to five of that vendor's unlinked conversation tokens, oldest first."),
         part: z.number().int().positive().optional().describe("Page number. Defaults to the first page."),
+        view: z.string().regex(/^[a-f0-9]{64}$/).optional().describe("Wake rendering fingerprint from a previous page; changed rendering requires a new first page."),
         snapshot: z.number().int().nonnegative().optional().describe("The note count the view is pinned to, from a previous page's next command."),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     wrap(async (args) => {
-      const result = store.wake(args);
+      const result = wakeView(store, args, options.compactor);
       if (!args.vendor || options.lazyResolution !== true || !result.endsWith("You are awake.")) return result;
       const pending = transcripts.unresolved(args.vendor);
       return result + (pending.length ? `\nUnresolved ${args.vendor} conversations, oldest first:\n` + pending.map(c => c.token + (c.status === "ambiguous" ? " [ambiguous: conflicting origin markers recorded]" : "")).join("\n") : "");
@@ -135,6 +142,7 @@ export function createApocryphaMcpServer(store, options = {}) {
           conv: z.string().optional().describe("Existing conversation token. Omitted, a new conversation and token are created."),
           vendor: z.enum(["claude", "chatgpt"]).describe("claude or chatgpt."),
           user: z.string().describe("The user side of the turn."),
+          summary: z.string().optional().describe("One-line description of the turn; an empty or missing value uses a user-message excerpt."),
           assistant: z.string().describe("The assistant side of the turn."),
           turn: z.number().int().positive().optional().describe("Turn number within the conversation; must increase. Omitted, the server assigns the next number among stored turns."),
           omitted: z.enum(["id","account","suicide","self-harm","disordered-eating","attachment","length"]).optional().describe("One category word recorded with the turn."),
@@ -156,7 +164,9 @@ export function createApocryphaMcpServer(store, options = {}) {
     wrap(async ({ text, turn, resolve }) => {
       if ([text,turn,resolve].filter(v=>v!==undefined).length !== 1) throw new Error("Supply exactly one of text, turn, resolve.");
       if (turn) {
+        if (options.compactor) await options.compactor.reconcile();
         const t = transcripts.append(turn);
+        await mirror();
         return JSON.stringify({id:t.id,conv:t.conv,vendor:t.vendor,turn:t.turn,at:t.at,newConversation:t.newConversation === true,replayed:t.replayed === true});
       }
       if (resolve) {
@@ -167,13 +177,8 @@ export function createApocryphaMcpServer(store, options = {}) {
       }
       rejectOriginMarker(text);
       const id = store.append(text);
-      const task = store.compressionTask();
-      try {
-        await queueDriveMirror(store, options.drive);
-      } catch (error) {
-        // The append is already durable. The mirror is explicitly best-effort.
-        console.error("Drive mirror failed after note; continuing:", error);
-      }
+      const task = options.compactor?.available ? null : store.compressionTask();
+      await mirror();
       return `Saved as #${id}.${task ? `\n\n${task}` : ""}`;
     }),
   );
@@ -189,7 +194,7 @@ export function createApocryphaMcpServer(store, options = {}) {
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
-    wrap(async ({ range, summary }) => { rejectOriginMarker(summary); return store.sleep(range, summary); }),
+    wrap(async ({ range, summary }) => { rejectOriginMarker(summary); const result = store.sleep(range, summary); await mirror(); return result; }),
   );
 
   server.registerTool(
@@ -227,7 +232,7 @@ export function createApocryphaMcpServer(store, options = {}) {
       inputSchema: { range: z.string().describe("Inclusive aligned block range of the summary, for example 16-31.") },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
     },
-    wrap(async ({ range }) => store.forget(range)),
+    wrap(async ({ range }) => { const result = store.forget(range); await mirror(); return result; }),
   );
 
   return server;

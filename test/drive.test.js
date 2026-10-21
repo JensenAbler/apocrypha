@@ -5,14 +5,18 @@ import path from "node:path";
 import test from "node:test";
 
 import { mirrorToDrive } from "../src/drive.js";
+import { completeWakeView } from "../src/wake-view.js";
 import { ApocryphaStore } from "../src/storage.js";
 
-test("Drive mirror replaces the body with a full raw-log rendering", async () => {
+test("Drive mirror is exactly the wake rendering, including leaves and summaries", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "apocrypha-drive-"));
   try {
     const store = new ApocryphaStore(directory);
     store.append("first fact", "2026-08-22");
     store.append("second fact", "2026-08-22");
+    store.append("t1 chatgpt: private turn leaf");
+    store.append("t2 claude 2026-10-20: backfilled turn leaf");
+    while(store.pendingCount()){const[a,b]=store.pending(undefined,1)[0];store.sleep(a+"-"+(b-1),"shared summary");}
     const calls = [];
     const fetchImpl = async (url, options = {}) => {
       calls.push({ url: String(url), options });
@@ -32,7 +36,8 @@ test("Drive mirror replaces the body with a full raw-log rendering", async () =>
     assert.deepEqual(request.requests[0], {
       deleteContentRange: { range: { startIndex: 1, endIndex: 41 } },
     });
-    assert.equal(request.requests[1].insertText.text, "#0 2026-08-22 first fact\n#1 2026-08-22 second fact\n");
+    assert.equal(request.requests[1].insertText.text, completeWakeView(store));
+    assert.match(request.requests[1].insertText.text, /t1 chatgpt: private turn leaf/);
     assert.doesNotMatch(request.requests[1].insertText.text, /\\#\d/);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });

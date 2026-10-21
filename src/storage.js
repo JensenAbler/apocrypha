@@ -1,5 +1,7 @@
 import fs from "node:fs";
+import { createHash } from "node:crypto";
 import path from "node:path";
+import { withWriterLock } from "./writer-lock.js";
 
 export const ENTRY_BYTES = 280;
 export const LOG_RECORD_BYTES = 320;
@@ -44,6 +46,23 @@ export function normalizeText(value) {
     throw new Error(`Too long: ${bytes} UTF-8 bytes, limit ${ENTRY_BYTES}.`);
   }
   return text;
+}
+
+export function turnLeafId(line) {
+  return /^#\d+ \S+ (t[1-9]\d*) /.exec(line)?.[1] ?? null;
+}
+
+export function turnLeafText(turn, { backfill = false, summary } = {}) {
+  const description = (summary ?? turn.summary ?? '').trim().replace(/\s+/gu, ' ') || turn.user.trim().replace(/\s+/gu, ' ');
+  const text = `${turn.id} ${turn.vendor}${backfill ? ' ' + turn.at.slice(0, 10) : ''}: ${description}`;
+  if (Buffer.byteLength(text) <= ENTRY_BYTES) return text;
+  let result = '', bytes = 0;
+  for (const char of text) {
+    const size = Buffer.byteLength(char);
+    if (bytes + size > ENTRY_BYTES - Buffer.byteLength('…')) break;
+    result += char; bytes += size;
+  }
+  return result + '…';
 }
 
 function paddedRecord(text, recordBytes) {
@@ -172,7 +191,7 @@ export class ApocryphaStore {
     this.treeDirectory = path.join(this.directory, "TREE");
     fs.mkdirSync(this.treeDirectory, { recursive: true, mode: 0o700 });
     if (!fs.existsSync(this.logFile)) fs.closeSync(fs.openSync(this.logFile, "a", 0o600));
-    repairTrailingRecord(this.logFile, LOG_RECORD_BYTES);
+    // Partial trailing records are repaired only by an append under the writer lock.
   }
 
   treeFile(size) {
@@ -194,6 +213,10 @@ export class ApocryphaStore {
   }
 
   append(value, date = today()) {
+    return withWriterLock(this.directory, () => this.appendUnlocked(value, date));
+  }
+
+  appendUnlocked(value, date = today()) {
     const text = normalizeText(value);
     repairTrailingRecord(this.logFile, LOG_RECORD_BYTES);
     const id = this.count();
@@ -287,6 +310,10 @@ export class ApocryphaStore {
   }
 
   sleep(range, summary) {
+    return withWriterLock(this.directory, () => this.sleepUnlocked(range, summary));
+  }
+
+  sleepUnlocked(range, summary) {
     const total = this.count();
     if (range === undefined && summary === undefined) {
       return this.compressionTask(total) ?? "Nothing left to compress.";
@@ -312,7 +339,7 @@ export class ApocryphaStore {
     return `${range} saved.\n${following ?? "Nothing left to compress."}`;
   }
 
-  wake({ part = 1, snapshot, vendor } = {}) {
+  wake({ part = 1, snapshot, vendor, allowPending = false, view } = {}) {
     if (vendor !== undefined && !["claude", "chatgpt"].includes(vendor)) throw new Error("Invalid wake vendor.");
     const now = this.count();
     const total = snapshot ?? now;
@@ -320,7 +347,7 @@ export class ApocryphaStore {
     if (!Number.isSafeInteger(total) || total < 0 || total > now) {
       throw new Error(`snapshot must be between 0 and ${now}.`);
     }
-    const task = this.compressionTask(total);
+    const task = allowPending ? null : this.compressionTask(total);
     if (task) {
       throw new Error(
         `Cannot wake: ${plural(this.pendingCount(total), "compression")} are outstanding. ` +
@@ -328,27 +355,29 @@ export class ApocryphaStore {
       );
     }
     if (total === 0) return "Apocrypha, oldest first (0 memories).\nNo memories yet. You are awake.";
-    const lines = cover(total).map(([lo, hi]) => {
-      if (hi - lo === 1) return this.get(lo);
-      const summary = this.readBlock(lo, hi);
+    const lines = [];
+    const render = (lo, hi) => {
+      if (hi - lo === 1) { lines.push(this.get(lo)); return; }
+      const available = this.blockCount(hi - lo) > lo / (hi - lo);
+      const summary = available ? this.readBlock(lo, hi) : null;
       if (summary === null) {
-        throw new Error(
-          `The summary of #${lo}-${hi - 1} is blank or corrupt. ` +
-          `Run apocrypha_forget with range "${lo}-${hi - 1}".`,
-        );
-      }
-      return `#${lo}-${hi - 1} ${summary}`;
-    });
-    const pages = paginate(lines);
+        if (!allowPending) throw new Error(`The summary of #${lo}-${hi - 1} is blank or corrupt. Run apocrypha_forget with range "${lo}-${hi - 1}".`);
+        const mid = (lo + hi) / 2; render(lo, mid); render(mid, hi);
+      } else lines.push(`#${lo}-${hi - 1} ${summary}`);
+    };
+    for (const [lo, hi] of cover(total)) render(lo, hi);
+    const fingerprint = createHash("sha256").update(lines.join("\n")).digest("hex");
+    if (view !== undefined && view !== fingerprint) throw new Error("Wake view changed during compaction; restart from the first page.");
+    const pages = paginate(lines, PAGE_BYTES - 1000);
     if (part > pages.length) throw new Error(`No part ${part}; this wake has ${plural(pages.length, "part")}.`);
     const heading = pages.length > 1
       ? `Apocrypha, part ${part} of ${pages.length}, oldest first (${plural(total, "memory")}).`
       : `Apocrypha, oldest first (${plural(total, "memory")}).`;
     const body = pages[part - 1].join("\n");
     const footer = part < pages.length
-      ? `Not awake yet. Next command: apocrypha_wake(${JSON.stringify({ part: part + 1, snapshot: total, ...(vendor ? { vendor } : {}) })})`
+      ? `Not awake yet. Next command: apocrypha_wake(${JSON.stringify({ part: part + 1, snapshot: total, ...(vendor ? { vendor } : {}), ...(allowPending ? { view: fingerprint } : {}) })})`
       : "You are awake.";
-    return `${heading}\n${body}\n${footer}`;
+    return `${heading}${allowPending && this.pendingCount(total) ? `\nBackground compaction: ${this.pendingCount(total)} pending blocks.` : ""}\n${body}\n${footer}`;
   }
 
   recall(pattern) {
@@ -379,6 +408,10 @@ export class ApocryphaStore {
   }
 
   forget(range) {
+    return withWriterLock(this.directory, () => this.forgetUnlocked(range));
+  }
+
+  forgetUnlocked(range) {
     const [lo, hi] = parseRange(range);
     const total = this.count();
     const removed = [];

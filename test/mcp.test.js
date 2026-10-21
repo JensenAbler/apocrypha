@@ -38,6 +38,7 @@ test("MCP exposes five portable tools and rejects a 400-character note", async (
     const prescriptive = /\b(should|must call|before answering|don't|do not|never store|Jensen)\b/i;
     // The capture instruction is the single prescriptive passage, and it opens the note tool.
     assert.ok(noteTool.description.startsWith(CAPTURE_INSTRUCTION));
+    assert.match(CAPTURE_INSTRUCTION, /summary.*one-line/);
     const directive = /call this tool|each reply|every later turn/i;
     for (const tool of listed.tools) {
       const rest = tool.name === "apocrypha_note" ? tool.description.replace(CAPTURE_INSTRUCTION, "") : tool.description;

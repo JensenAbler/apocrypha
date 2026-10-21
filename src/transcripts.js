@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
+import { withWriterLock } from './writer-lock.js';
+import { ApocryphaStore, turnLeafText, turnLeafId } from './storage.js';
 import { randomBytes, createHash } from 'node:crypto';
 
 // No application cap on transcript turns: the binding limits are the clients'
@@ -68,91 +69,6 @@ function appendRecord(file, record) {
   try { fs.fsyncSync(dir); } finally { fs.closeSync(dir); }
 }
 
-// Acquisition, release and stale-owner replacement all hold this guard. We never
-// recover a stale guard automatically: that would reintroduce the unlink race.
-function syncDirectory(directory) {
-  const fd = fs.openSync(directory, 'r');
-  try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-}
-function sameInode(a, b) { return a.dev === b.dev && a.ino === b.ino; }
-function processIdentity(pid) {
-  const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
-  const end = stat.lastIndexOf(')');
-  const fields = stat.slice(end + 2).trim().split(/\s+/);
-  if (end < 0 || !/^\d+$/.test(fields[19] || '')) throw new Error('Unverifiable process identity.');
-  return { start: fields[19], state: fields[0] };
-}
-function localIdentity() {
-  if (process.platform !== 'linux') throw new Error('Transcript locking requires Linux process identity; no unsafe fallback.');
-  return {
-    version: 2,
-    machine: hash(fs.readFileSync('/etc/machine-id', 'utf8').trim()),
-    host: os.hostname(),
-    boot: fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim(),
-    namespace: fs.readlinkSync('/proc/self/ns/pid'),
-    pid: process.pid,
-    start: processIdentity(process.pid).start,
-  };
-}
-function ownerIsProvablyDead(owner, local) {
-  if (!owner || owner.version !== 2 || !Number.isSafeInteger(owner.pid) || owner.pid <= 0 || !/^\d+$/.test(owner.start || '') ||
-      ['machine', 'host', 'boot', 'namespace'].some(key => typeof owner[key] !== 'string' || owner[key] !== local[key])) return false;
-  try {
-    const current = processIdentity(owner.pid);
-    // Same PID with a different birth time means PID reuse, not the old writer.
-    return current.start !== owner.start || current.state === 'Z' || current.state === 'X';
-  } catch (error) {
-    if (error.code !== 'ENOENT') return false;
-    // Two independent local observations; EPERM or any ambiguity is not death.
-    try { process.kill(owner.pid, 0); return false; }
-    catch (killError) { return killError.code === 'ESRCH'; }
-  }
-}
-function withRecoveryGuard(store, fn) {
-  const guard = `${store.lockFile}.recovery`;
-  const sleeper = new Int32Array(new SharedArrayBuffer(4));
-  let held = false;
-  for (let tries = 0; tries < 100; tries++) {
-    try { fs.mkdirSync(guard, { mode: 0o700 }); held = true; break; }
-    catch (error) { if (error.code !== 'EEXIST') throw error; Atomics.wait(sleeper, 0, 0, 10); }
-  }
-  if (!held) throw new Error('Transcript writer is busy: recovery guard is held. A stopped guard owner requires operator verification; no automatic guard deletion.');
-  const inode = fs.lstatSync(guard);
-  try { return fn(); }
-  finally {
-    const current = fs.lstatSync(guard);
-    if (!current.isDirectory() || !sameInode(inode, current)) throw new Error('Recovery guard identity changed; refusing removal.');
-    fs.rmdirSync(guard); syncDirectory(store.directory);
-  }
-}
-function acquireWriter(store) {
-  const local = localIdentity();
-  return withRecoveryGuard(store, () => {
-    try {
-      const fd = fs.openSync(store.lockFile, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
-      let inode, owner, ownerText;
-      try {
-        inode = fs.fstatSync(fd);
-        if (!inode.isFile() || inode.nlink !== 1 || inode.size > 8192) throw new Error('Unverifiable writer lock; operator verification required.');
-        try { ownerText = fs.readFileSync(fd, 'utf8'); owner = JSON.parse(ownerText); } catch { owner = null; }
-      } finally { fs.closeSync(fd); }
-      if (!ownerIsProvablyDead(owner, local)) throw new Error('Transcript writer is busy or ownership is unverified. Live, foreign, old-boot and legacy locks require completion or operator verification.');
-      const current = fs.lstatSync(store.lockFile);
-      if (!current.isFile() || !sameInode(inode, current) || current.nlink !== 1 || fs.readFileSync(store.lockFile, 'utf8') !== ownerText || !ownerIsProvablyDead(owner, local)) throw new Error('Writer lock identity changed; refusing stale recovery.');
-      fs.unlinkSync(store.lockFile);
-      syncDirectory(store.directory);
-    } catch (error) {
-      if (error.code !== 'ENOENT') throw error;
-    }
-    // The guard excludes all compliant acquisition/release/recovery competitors.
-    const fd = fs.openSync(store.lockFile, 'wx', 0o600);
-    const inode = fs.fstatSync(fd);
-    try { fs.writeFileSync(fd, `${JSON.stringify(local)}\n`); fs.fsyncSync(fd); syncDirectory(store.directory); }
-    catch (error) { fs.closeSync(fd); throw error; } // Preserve uncertain lock, never guess.
-    return { fd, inode };
-  });
-}
-
 /** Own assistant text copies, not canonical vendor exports. No implicit capture or Drive mirror. */
 export class TranscriptStore {
   constructor(directory, options = {}) {
@@ -166,19 +82,7 @@ export class TranscriptStore {
     fs.mkdirSync(this.directory, { recursive: true, mode: 0o700 });
     this.state();
   }
-  locked(fn) {
-    const lock = acquireWriter(this);
-    try { return fn(); }
-    finally {
-      try {
-        withRecoveryGuard(this, () => {
-          const current = fs.lstatSync(this.lockFile);
-          if (!current.isFile() || !sameInode(lock.inode, current) || current.nlink !== 1) throw new Error('Writer lock identity changed; refusing release.');
-          fs.unlinkSync(this.lockFile); syncDirectory(this.directory);
-        });
-      } finally { fs.closeSync(lock.fd); }
-    }
-  }
+  locked(fn) { return withWriterLock(this.directory, fn); }
   state() {
     const events = records(this.conversationFile);
     const conversations = new Map();
@@ -204,7 +108,7 @@ export class TranscriptStore {
     for (let i = 0; i < turns.length; i++) {
       const t = turns[i], c = conversations.get(t.conv);
       if (t.id !== `t${i + 1}` || !c || c.vendor !== t.vendor || !Number.isSafeInteger(t.turn) || t.turn <= (last.get(t.conv) || 0) ||
-          typeof t.user !== 'string' || typeof t.assistant !== 'string' || !Number.isFinite(Date.parse(t.at))) throw new Error('Corrupt transcript record or sequence.');
+          typeof t.user !== 'string' || typeof t.assistant !== 'string' || (t.summary !== undefined && typeof t.summary !== 'string') || !Number.isFinite(Date.parse(t.at))) throw new Error('Corrupt transcript record or sequence.');
       last.set(t.conv, t.turn);
     }
     return { events, conversations, turns, last };
@@ -212,16 +116,17 @@ export class TranscriptStore {
   append(input) {
     if (!input || !VENDORS.has(input.vendor)) throw new Error('An explicit vendor, claude or chatgpt, is required.');
     assertSafeText(input.user); assertSafeText(input.assistant);
+    if (input.summary !== undefined) assertSafeText(input.summary);
     if (input.omitted !== undefined && !OMITTED.has(input.omitted)) throw new Error('omitted must be one category word: id, account, suicide, self-harm, disordered-eating, attachment, or length.');
     if (input.conv !== undefined && !TOKEN.test(input.conv)) throw new Error('Invalid conversation token.');
     if (input.turn !== undefined && (!Number.isSafeInteger(input.turn) || input.turn < 1)) throw new Error('turn must be a positive safe integer.');
     const requestId = requestKey(input.requestId);
-    const digest = hash(canonical({ conv: input.conv ?? null, vendor: input.vendor, turn: input.turn ?? null, user: input.user, assistant: input.assistant, omitted: input.omitted ?? null }));
+    const digest = hash(canonical({ conv: input.conv ?? null, vendor: input.vendor, turn: input.turn ?? null, user: input.user, assistant: input.assistant, omitted: input.omitted ?? null, ...(input.summary !== undefined ? {summary: input.summary} : {}) }));
     return this.locked(() => {
       const s = this.state();
       if (requestId) {
         const prior = s.turns.find(t => t.requestId === requestId);
-        if (prior) { if (prior.requestHash !== digest) throw new Error('requestId was already used with different turn content.'); return { ...prior, replayed: true }; }
+        if (prior) { if (prior.requestHash !== digest) throw new Error('requestId was already used with different turn content.'); this.reconcileUnlocked(); return { ...prior, replayed: true }; }
       }
       let conv = input.conv;
       let created = false;
@@ -240,12 +145,31 @@ export class TranscriptStore {
       if (turn <= (s.last.get(conv) || 0)) throw new Error('turn must increase; use the original requestId to retry an append.');
       const at = pacificTimestamp(this.clock());
       const record = { id: `t${s.turns.length + 1}`, conv, vendor: input.vendor, turn, at, user: input.user, assistant: input.assistant };
+      if (input.summary !== undefined) record.summary = input.summary;
       if (input.omitted !== undefined) record.omitted = input.omitted;
       if (requestId) { record.requestId = requestId; record.requestHash = digest; }
       if (created) appendRecord(this.conversationFile, { type: 'created', token: conv, vendor: input.vendor, at, ...(requestId ? { requestId, requestHash: digest } : {}) });
       appendRecord(this.turnFile, record);
+      this.reconcileUnlocked({ freshId: record.id });
       return { ...record, newConversation: created };
     });
+  }
+  missingLeaves(store = new ApocryphaStore(this.directory)) {
+    const present = new Set(store.entries().map(turnLeafId).filter(Boolean));
+    return this.entries().filter(t => !present.has(t.id));
+  }
+  reconcileUnlocked({ freshId, summaries = {}, ids } = {}) {
+    const store = new ApocryphaStore(this.directory);
+    const missing = this.missingLeaves(store).filter(turn => !ids || ids.includes(turn.id));
+    for (const turn of missing) {
+      store.appendUnlocked(turnLeafText(turn, { backfill: turn.id !== freshId, summary: summaries[turn.id] }));
+    }
+    return { added: missing.length, ids: missing.map(t => t.id) };
+  }
+  reconcile({ dryRun = false, ...options } = {}) {
+    return this.locked(() => dryRun
+      ? { added: this.missingLeaves().length, dryRun: true }
+      : this.reconcileUnlocked(options));
   }
   entries() { return this.state().turns; }
   get(id) {

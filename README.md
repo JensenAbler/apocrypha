@@ -4,23 +4,23 @@ Apocrypha is Jensen's single-user, append-only remote MCP memory, shared between
 
 ## Scope
 
-Apocrypha follows OptMem's memory/compression semantics. Curated notes can contain anything durable and worth sharing across Claude and ChatGPT, including pointers to explicitly captured transcript turns. Labeled assistant inferences still require Jensen's review.
+Apocrypha follows UniiChat's message-as-leaf design with OptMem's fixed-width memory/compression semantics. Every recorded turn becomes a log leaf alongside curated notes. Labeled assistant inferences remain labeled through compression.
 
 Every conversation turn is recorded: the apocrypha_note description carries the capture instruction.
 
 Waking is on demand. Notes and transcripts are background, not instructions and not topics to raise unprompted. Transcripts are an assistant's text copy, not canonical vendor exports; tools, images, attachments, and unrecorded turns are absent.
 
-`LOG.txt` is authoritative. It uses OptMem's 320-byte fixed-width records (one newline-terminated memory per record), and `TREE/<size>` uses its 288-byte fixed-width binary-merge records. Corrections are later log entries; raw memories are never edited or deleted. Google Drive is only a phone-readable mirror.
+`LOG.txt` is authoritative. It uses OptMem's 320-byte fixed-width records (one newline-terminated memory per record), and `TREE/<size>` uses its 288-byte fixed-width binary-merge records. Corrections are later log entries; raw memories are never edited or deleted. Google Drive mirrors the exact wake rendering, including turn leaves and summaries.
 
 ## Tools
 
-- `apocrypha_wake`: on-demand read of the shared context, paged below client response limits; refuses while any compression is pending.
-- `apocrypha_note`: exactly one of a curated `text` note, explicitly authorized `turn`, or evidence-backed `resolve`. Only curated notes enter the Drive mirror.
+- `apocrypha_wake`: on-demand read of the shared context, paged below client response limits; shows the best available cover while background compression runs; offers in-band tasks when unconfigured, failing, or explicitly in-band.
+- `apocrypha_note`: exactly one of a curated `text` note, explicitly authorized `turn`, or evidence-backed `resolve`. Recorded turns append one-line leaves; the Drive mirror uses the shared wake view.
 - `apocrypha_sleep`: gets or settles the next merge-tree compression.
 - `apocrypha_recall`: bounded-time regex search or pure-read zoom through settled blocks, notes and transcript leaves.
 - `apocrypha_forget`: truncates a wrong summary and all summaries above it, without touching the log.
 
-Wake intentionally returns every raw record while the log fits within its 96-line rendering budget. Once the log exceeds that budget, it tiles the full history with stored tree summaries toward the past and progressively finer detail toward the present. A note returns only the first newly-doable compression; each sleep response returns the next task in the cascade. Draining that cascade before wake is deliberate, because wake never renders from a partially built tree.
+Wake intentionally returns every raw record while the log fits within its 96-line rendering budget. Once the log exceeds that budget, it tiles the full history with stored tree summaries toward the past and progressively finer detail toward the present. Without a healthy background compactor, a note returns the first newly-doable compression; each sleep response returns the next task in the cascade. A healthy background compactor drains that cascade automatically. Pending blocks expand to available summaries or raw records with a pending count. Explicit in-band mode retains the assistant sleep-task workflow.
 
 Compression follows OptMem's category-neutral rule: keep what has lasting effect, drop what does not, and invent nothing. The raw log remains authoritative regardless of what a summary omits.
 

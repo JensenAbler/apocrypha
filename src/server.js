@@ -6,9 +6,12 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { getOAuthProtectedResourceMetadataUrl, mcpAuthRouter } from "@modelcontextprotocol/sdk/server/auth/router.js";
 
+import { TranscriptStore } from "./transcripts.js";
 import { ApocryphaStore } from "./storage.js";
 import { createApocryphaMcpServer } from "./mcp.js";
-import { isDriveConfigured } from "./drive.js";
+import { BackgroundCompactor, modelFromEnvironment } from "./compactor.js";
+import { completeWakeView } from "./wake-view.js";
+import { queueDriveMirror, isDriveConfigured } from "./drive.js";
 import { ApocryphaOAuthProvider, OAUTH_SCOPES, createOAuthApprovalRouter } from "./oauth.js";
 
 const port = Number(process.env.PORT || 8787);
@@ -24,6 +27,20 @@ if (!memoryDirectory) throw new Error("MEMORY_DIR is required.");
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("PORT must be a valid TCP port.");
 
 const store = new ApocryphaStore(memoryDirectory);
+let transcripts;
+let reconciliationError = null;
+try { transcripts = new TranscriptStore(memoryDirectory); }
+catch (error) { reconciliationError = error.message; console.error(JSON.stringify({event:'reconciliation_error',message:error.message})); }
+let compactor;
+const mirror = () => queueDriveMirror(store, { render: () => completeWakeView(store, compactor) });
+compactor = new BackgroundCompactor(store, { mode:process.env.APOCRYPHA_COMPACTION_MODE || "background", model:modelFromEnvironment(), transcripts,
+  onChange:async()=>{try {await mirror();}catch(error){console.error(JSON.stringify({event:'mirror_error',message:error.message}));}} });
+if ((!compactor.configured || compactor.mode === "in-band") && transcripts) {
+  try {console.log(JSON.stringify({event:'turn_leaf_reconciliation',...transcripts.reconcile()}));}
+  catch(error){reconciliationError=error.message;}
+}
+compactor.start();
+void mirror().catch(error=>console.error(JSON.stringify({event:'mirror_error',message:error.message})));
 const publicOrigin = new URL(`https://${publicHostname}`);
 const resourceUrl = new URL("/mcp", publicOrigin);
 const oauthProvider = new ApocryphaOAuthProvider({
@@ -78,7 +95,7 @@ async function requireBearer(req, res, next) {
 }
 
 app.get("/healthz", (_req, res) => {
-  res.json({ ok: true, memories: store.count() });
+  res.json({ ok: !reconciliationError, memories: store.count(), compactor: compactor.status(), reconciliationError });
 });
 
 app.use(createOAuthApprovalRouter(oauthProvider));
@@ -98,7 +115,7 @@ app.post("/mcp", async (req, res) => {
     sessionIdGenerator: undefined,
     enableJsonResponse: true,
   });
-  const server = createApocryphaMcpServer(store);
+  const server = createApocryphaMcpServer(store, { transcripts, compactor, mirror });
   let closed = false;
   const closeProtocolObjects = () => {
     if (closed) return;
@@ -131,6 +148,7 @@ const listener = outer.listen(port, host, () => {
 
 function shutdown(signal) {
   console.log(`${signal}: shutting down.`);
+  compactor.stop();
   listener.close(() => process.exit(0));
 }
 
