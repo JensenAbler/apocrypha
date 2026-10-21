@@ -52,8 +52,9 @@ export function turnLeafId(line) {
   return /^#\d+ \S+ (t[1-9]\d*) /.exec(line)?.[1] ?? null;
 }
 
-export function turnLeafText(turn, { backfill = false, summary } = {}) {
-  const description = (summary ?? turn.summary ?? '').trim().replace(/\s+/gu, ' ') || turn.user.trim().replace(/\s+/gu, ' ');
+export function turnLeafText(turn, { backfill = false, summary, legacyFallback = false } = {}) {
+  const supplied = (summary ?? turn.summary ?? '').trim().replace(/\s+/gu, ' ');
+  const description = supplied || (legacyFallback ? '' : 'User said: ') + turn.user.trim().replace(/\s+/gu, ' ');
   const text = `${turn.id} ${turn.vendor}${backfill ? ' ' + turn.at.slice(0, 10) : ''}: ${description}`;
   if (Buffer.byteLength(text) <= ENTRY_BYTES) return text;
   let result = '', bytes = 0;
@@ -205,6 +206,39 @@ export class ApocryphaStore {
   get(index) {
     const record = readRecord(this.logFile, index, LOG_RECORD_BYTES);
     if (record === null) throw new Error(`Memory #${index} does not exist.`);
+    return this.attributeLegacyLeaf(record);
+  }
+
+  attributeLegacyLeaf(record) {
+    const id = turnLeafId(record);
+    if (!id) return record;
+    // Old leaves remain byte-for-byte in the append-only log. Only exact
+    // legacy user-excerpt fallbacks receive a speaker label in read views.
+    const file = path.join(this.directory, 'TRANSCRIPTS.jsonl');
+    try {
+      const stat = fs.statSync(file, {bigint:true});
+      const version = stat.size + ':' + stat.mtimeNs;
+      if (this.attributionVersion !== version) {
+        const turns = new Map();
+        const lines = fs.readFileSync(file, 'utf8').split('\n');
+        lines.pop(); // Ignore an incomplete trailing write.
+        for (const line of lines) {
+          try { const turn=JSON.parse(line); if(turn.id)turns.set(turn.id,turn); } catch {}
+        }
+        this.attributionTurns=turns; this.attributionVersion=version;
+      }
+      const turn=this.attributionTurns.get(id);
+      if (!turn || turn.summary?.trim()) return record;
+      const match=/^(#\d+ \S+ )(.+)$/.exec(record);
+      if (!match) return record;
+      for (const backfill of [false,true]) {
+        if(match[2]===turnLeafText(turn,{backfill,legacyFallback:true})) {
+          return match[1]+turnLeafText(turn,{backfill});
+        }
+      }
+    } catch {
+      // Curated notes and existing leaves stay readable if transcripts are unavailable.
+    }
     return record;
   }
 

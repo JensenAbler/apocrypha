@@ -20,7 +20,7 @@ test('turn appends exactly one leaf, summary and fallback, UTF8 truncation', t=>
  assert.equal(store.count(),1);
  assert.match(store.get(0),/t1 chatgpt: Assistant describes topic$/);
  ts.append({...input,summary:''});
- assert.match(store.get(1),/t2 chatgpt: User question 😀$/);
+ assert.match(store.get(1),/t2 chatgpt: User said: User question 😀$/);
  const long=turnLeafText({...a,user:'😀'.repeat(300),summary:''});
  assert.ok(Buffer.byteLength(long)<=280);assert.ok(long.endsWith('…'));
  assert.equal(long.includes('�'),false);
@@ -37,7 +37,7 @@ test('crash repair, repeated reconciliation, backfill dates and writer lock',t=>
  assert.deepEqual(ts.reconcile({dryRun:true}),{added:5,dryRun:true});
  assert.equal(store.count(),0);
  assert.equal(ts.reconcile().added,5);assert.equal(ts.reconcile().added,0);
- for(const line of store.entries())assert.match(line,/t\d+ chatgpt \d{4}-\d{2}-\d{2}: User question/);
+ for(const line of store.entries())assert.match(line,/t\d+ chatgpt \d{4}-\d{2}-\d{2}: User said: User question/);
  ts.locked(()=>assert.throws(()=>ts.reconcile(),/writer is busy/));
 });
 test('root zoom reaches every leaf and full linked transcript; recent wake raw',t=>{
@@ -52,5 +52,24 @@ test('root zoom reaches every leaf and full linked transcript; recent wake raw',
  walk('0-31');assert.equal(leaves.length,32);
  const full=zoom(store,ts,{id:'#0'});
  assert.ok(full.includes(input.user));assert.ok(full.includes(input.assistant));assert.ok(full.includes(url));
- assert.match(store.wake(),/t32 chatgpt: User question 😀/);
+ assert.match(store.wake(),/t32 chatgpt: User said: User question 😀/);
+});
+
+test('legacy excerpts gain speaker attribution without changing durable records or summaries',t=>{
+ const {store,ts}=fixture(t);
+ const original=ts.reconcileUnlocked;ts.reconcileUnlocked=()=>{};
+ const a=ts.append({...input,vendor:'claude',user:"I'm ready."});
+ ts.reconcileUnlocked=original;
+ store.append(turnLeafText(a,{legacyFallback:true}));
+ store.append(turnLeafText(a,{legacyFallback:true,backfill:true}));
+ const before=fs.readFileSync(store.logFile);
+ assert.match(store.get(0),/t1 claude: User said: I'm ready\.$/);
+ assert.match(store.get(1),/t1 claude \d{4}-\d{2}-\d{2}: User said:/);
+ assert.deepEqual(fs.readFileSync(store.logFile),before);
+ assert.match(store.compressionTask(),/User said:/);
+ assert.match(zoom(store,ts,{id:'#0'}),/t1 user:\nI'm ready\./);
+ // A generated/supplied description is not relabeled as a user quotation.
+ ts.append({...input,summary:'The assistant explained the result.'});
+ assert.match(store.get(2),/chatgpt: The assistant explained the result\.$/);
+ assert.doesNotMatch(store.get(2),/User said:/);
 });
