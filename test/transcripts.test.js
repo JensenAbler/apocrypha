@@ -110,6 +110,13 @@ test('strict canonical vendor URL validation rejects spoofing and non-chat paths
   for (const bad of [url + '?x=1', url + '#x', url + '/', url.replace('https:', 'http:'), url.replace('chatgpt.com', 'chatgpt.com.evil.test'), url.replace('chatgpt.com', 'user@chatgpt.com'), url.replace('/c/', '/share/'), url.replace(uuid, 'not-a-chat'), url.replace('chatgpt.com', 'claude.ai')]) assert.throws(() => validateChatUrl(bad, 'chatgpt'));
 });
 
+test('claude.ai/code/session_ URLs are accepted for claude only, strictly', () => {
+  const s = 'https://claude.ai/code/session_01AbCdEfGh23IjKlMn45';
+  assert.equal(validateChatUrl(s, 'claude'), s);
+  assert.throws(() => validateChatUrl(s, 'chatgpt'));
+  for (const bad of [s + '?x=1', s + '#x', s + '/', s.replace('https:', 'http:'), s.replace('claude.ai', 'claude.ai.evil.test'), s.replace('session_', 'sessions_'), 'https://claude.ai/code/session_short', 'https://claude.ai/code/session_bad.char!', 'https://claude.ai/code/' + 'x'.repeat(20), 'https://chatgpt.com/code/session_01AbCdEfGh23IjKlMn45']) assert.throws(() => validateChatUrl(bad, 'claude'));
+});
+
 test('bare-token or absent evidence cannot resolve; marked evidence persisted as hash only', t => {
   const s = fixture(t, { lazyResolution: true }), a = s.append(turn);
   assert.throws(() => s.resolve({ token: a.conv, url }), /origin marker/);

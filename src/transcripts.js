@@ -38,9 +38,14 @@ export function validateChatUrl(value, vendor) {
   try { url = new URL(value); } catch { throw new Error('Invalid canonical chat URL.'); }
   const host = vendor === 'claude' ? 'claude.ai' : 'chatgpt.com';
   const prefix = vendor === 'claude' ? 'chat' : 'c';
+  const uuidPath = new RegExp(`^/${prefix}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`, 'i');
+  // Claude Cowork / Claude Code sessions: https://claude.ai/code/session_<id>
+  const sessionPath = /^\/code\/session_[A-Za-z0-9_-]{8,128}$/;
+  const pathOk = uuidPath.test(url.pathname) || (vendor === 'claude' && sessionPath.test(url.pathname));
   if (url.protocol !== 'https:' || url.hostname !== host || url.port || url.username || url.password || url.search || url.hash ||
-      !new RegExp(`^/${prefix}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`, 'i').test(url.pathname) || url.href !== value) {
-    throw new Error(`Use a canonical https://${host}/${prefix}/<uuid> URL without query, fragment, credentials, or extra path.`);
+      !pathOk || url.href !== value) {
+    const forms = vendor === 'claude' ? `https://${host}/${prefix}/<uuid> or https://${host}/code/session_<id>` : `https://${host}/${prefix}/<uuid>`;
+    throw new Error(`Use a canonical ${forms} URL without query, fragment, credentials, or extra path.`);
   }
   return url.href;
 }
