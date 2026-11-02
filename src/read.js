@@ -53,12 +53,13 @@ export function zoom(store, transcripts, args) {
   if (args.range !== undefined) {
     const [lo, hi] = parseRange(args.range);
     if (hi > store.count()) throw new Error("Range extends beyond the memory log.");
+    if (store.isEmpty(lo, hi)) throw new Error(`#${args.range} holds no memories (reserved slots).`);
     summary(store, lo, hi); // Any settled block, not only the wake cover.
     label = `#${args.range}`;
-    if (hi - lo <= RAW_MAX) text = Array.from({ length: hi - lo }, (_, i) => raw(store, lo + i)).join("\n");
+    if (hi - lo <= RAW_MAX) text = Array.from({ length: hi - lo }, (_, i) => lo + i).filter(i => !store.isEmpty(i, i + 1)).map(i => raw(store, i)).join("\n");
     else {
       const mid = (lo + hi) / 2;
-      text = [[lo, mid], [mid, hi]].map(([a,b]) => `#${a}-${b - 1} ${summary(store,a,b)}`).join("\n");
+      text = [[lo, mid], [mid, hi]].filter(([a,b]) => !store.isEmpty(a, b)).map(([a,b]) => `#${a}-${b - 1} ${summary(store,a,b)}`).join("\n");
     }
   } else if (/^#(?:0|[1-9]\d*)$/.test(args.id || "")) {
     const id = Number(args.id.slice(1));

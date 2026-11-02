@@ -110,6 +110,52 @@ function readRecord(file, index, recordBytes) {
   }
 }
 
+// A record of only spaces is an empty slot: reserved space in the log (for
+// backfill) or a tree block with no summary yet. Empty log slots hold no memory.
+export function blankRecord(recordBytes) {
+  return Buffer.concat([Buffer.alloc(recordBytes - 1, 0x20), Buffer.from("\n")]);
+}
+
+const allRecordsCache = new Map();
+
+function invalidateRecords(file) {
+  for (const key of allRecordsCache.keys()) if (key.startsWith(`${file}:`)) allRecordsCache.delete(key);
+}
+
+function readAllRecords(file, recordBytes) {
+  let stat;
+  try {
+    stat = fs.statSync(file, { bigint: true });
+  } catch (error) {
+    if (error.code === "ENOENT") return [];
+    throw error;
+  }
+  const key = `${file}:${recordBytes}`;
+  const version = `${stat.ino}:${stat.size}:${stat.mtimeNs}`;
+  const cached = allRecordsCache.get(key);
+  if (cached?.version === version) return cached.records;
+  const buffer = fs.readFileSync(file);
+  const count = Math.floor(buffer.length / recordBytes);
+  const records = new Array(count);
+  for (let index = 0; index < count; index += 1) {
+    const decoded = buffer.toString("utf8", index * recordBytes, (index + 1) * recordBytes).trimEnd();
+    records[index] = decoded || null;
+  }
+  allRecordsCache.set(key, { version, records });
+  return records;
+}
+
+function writeRecordAt(file, index, record) {
+  const descriptor = fs.openSync(file, "r+");
+  try {
+    fs.writeSync(descriptor, record, 0, record.length, index * record.length);
+    fs.fsyncSync(descriptor);
+  } finally {
+    fs.closeSync(descriptor);
+    invalidateRecords(file);
+  }
+}
+
 export function parseRange(value) {
   const match = /^(\d+)-(\d+)$/.exec(value ?? "");
   if (!match) throw new Error(`'${value}' is not a block range. Use one printed by apocrypha_sleep.`);
@@ -203,6 +249,54 @@ export class ApocryphaStore {
     return recordCount(this.logFile, LOG_RECORD_BYTES);
   }
 
+  logRecords() {
+    return readAllRecords(this.logFile, LOG_RECORD_BYTES);
+  }
+
+  nonEmptyPrefix() {
+    const records = this.logRecords();
+    if (this.prefixFor !== records) {
+      const prefix = new Uint32Array(records.length + 1);
+      for (let index = 0; index < records.length; index += 1) prefix[index + 1] = prefix[index] + (records[index] === null ? 0 : 1);
+      this.prefix = prefix;
+      this.prefixFor = records;
+    }
+    return this.prefix;
+  }
+
+  // True when [lo, hi) holds no memories (only reserved slots).
+  isEmpty(lo, hi) {
+    const prefix = this.nonEmptyPrefix();
+    const end = Math.min(hi, prefix.length - 1);
+    const start = Math.min(lo, end);
+    return prefix[end] - prefix[start] === 0;
+  }
+
+  memoryCount(total = this.count()) {
+    const prefix = this.nonEmptyPrefix();
+    return prefix[Math.min(total, prefix.length - 1)];
+  }
+
+  leafIndex() {
+    const records = this.logRecords();
+    if (this.leafIndexFor !== records) {
+      const map = new Map();
+      records.forEach((line, index) => {
+        const id = line === null ? null : turnLeafId(line);
+        if (!id) return;
+        if (!map.has(id)) map.set(id, []);
+        map.get(id).push(index);
+      });
+      this.leafMap = map;
+      this.leafIndexFor = records;
+    }
+    return this.leafMap;
+  }
+
+  blankBlock(size, index) {
+    writeRecordAt(this.treeFile(size), index, blankRecord(TREE_RECORD_BYTES));
+  }
+
   get(index) {
     const record = readRecord(this.logFile, index, LOG_RECORD_BYTES);
     if (record === null) throw new Error(`Memory #${index} does not exist.`);
@@ -265,9 +359,9 @@ export class ApocryphaStore {
 
   fallbackLeaf(turn) {
     if(turn.summary?.trim())return null;
-    for(let index=0;index<this.count();index++) {
-      const line=readRecord(this.logFile,index,LOG_RECORD_BYTES);
-      if(turnLeafId(line)!==turn.id)continue;
+    const records=this.logRecords();
+    for(const index of this.leafIndex().get(turn.id) ?? []) {
+      const line=records[index];
       const prefix=/^(#\d+ \S+ )/.exec(line)[1];
       for(const backfill of [false,true])for(const legacyFallback of [false,true]) {
         if(line===prefix+turnLeafText(turn,{backfill,legacyFallback}))return {index,backfill};
@@ -291,12 +385,10 @@ export class ApocryphaStore {
       if(summaries[turn.id] || !leaf)return false;
       // Invalidate and fsync ancestors BEFORE publishing the derived leaf.
       // A crash can leave extra rebuild work, never a new leaf with stale ancestors.
+      // Only the leaf's own ancestors are blanked; sibling blocks stay settled.
       for(let size=2;size<=this.count();size*=2) {
-        const keep=Math.floor(leaf.index/size);
-        if(this.blockCount(size)>keep) {
-          const fd=fs.openSync(this.treeFile(size),'r+');
-          try {fs.ftruncateSync(fd,keep*TREE_RECORD_BYTES);fs.fsyncSync(fd);}finally{fs.closeSync(fd);}
-        }
+        const index=Math.floor(leaf.index/size);
+        if(this.blockCount(size)>index && this.readBlock(index*size,(index+1)*size)!==null)this.blankBlock(size,index);
       }
       const file=path.join(this.directory,'TURN_SUMMARIES.json'),temp=file+'.tmp';
       const fd=fs.openSync(temp,'w',0o600);
@@ -309,7 +401,7 @@ export class ApocryphaStore {
   }
 
   entries() {
-    return Array.from({ length: this.count() }, (_, index) => this.get(index));
+    return this.logRecords().filter(record => record !== null).map(record => this.attributeLegacyLeaf(record));
   }
 
   append(value, date = today()) {
@@ -340,12 +432,18 @@ export class ApocryphaStore {
     return recordCount(this.treeFile(size), TREE_RECORD_BYTES);
   }
 
+  // A complete block is pending when it holds at least one memory and has no
+  // summary. Blocks of only reserved slots never need one.
   pending(total = this.count(), limit = Infinity) {
     const output = [];
     for (let size = 2; size <= total; size *= 2) {
-      const have = this.blockCount(size);
-      for (let index = have; index < Math.floor(total / size); index += 1) {
-        output.push([index * size, (index + 1) * size]);
+      const tree = readAllRecords(this.treeFile(size), TREE_RECORD_BYTES);
+      const blocks = Math.floor(total / size);
+      for (let index = 0; index < blocks; index += 1) {
+        if (index < tree.length && tree[index] !== null) continue;
+        const lo = index * size;
+        if (this.isEmpty(lo, lo + size)) continue;
+        output.push([lo, lo + size]);
         if (output.length >= limit) return output;
       }
     }
@@ -353,11 +451,7 @@ export class ApocryphaStore {
   }
 
   pendingCount(total = this.count()) {
-    let result = 0;
-    for (let size = 2; size <= total; size *= 2) {
-      result += Math.max(0, Math.floor(total / size) - this.blockCount(size));
-    }
-    return result;
+    return this.pending(total).length;
   }
 
   compressionTask(total = this.count()) {
@@ -366,10 +460,12 @@ export class ApocryphaStore {
     const [lo, hi] = next;
     let source;
     if (hi - lo <= RAW_MAX) {
-      source = Array.from({ length: hi - lo }, (_, offset) => `  ${this.get(lo + offset)}`).join("\n");
+      source = Array.from({ length: hi - lo }, (_, offset) => lo + offset)
+        .filter((index) => !this.isEmpty(index, index + 1))
+        .map((index) => `  ${this.get(index)}`).join("\n");
     } else {
       const mid = (lo + hi) / 2;
-      const halves = [[lo, mid], [mid, hi]].map(([start, end]) => {
+      const halves = [[lo, mid], [mid, hi]].filter(([start, end]) => !this.isEmpty(start, end)).map(([start, end]) => {
         const summary = this.readBlock(start, end);
         if (summary === null) {
           throw new Error(
@@ -398,13 +494,23 @@ export class ApocryphaStore {
     const size = hi - lo;
     const file = this.treeFile(size);
     repairTrailingRecord(file, TREE_RECORD_BYTES);
-    if (this.blockCount(size) !== lo / size) return false;
+    const index = lo / size;
+    const count = this.blockCount(size);
+    const record = paddedRecord(summary, TREE_RECORD_BYTES);
+    if (index < count) {
+      // An interior blank slot: a block skipped earlier or invalidated since.
+      if (this.readBlock(lo, hi) !== null) return false;
+      writeRecordAt(file, index, record);
+      return true;
+    }
+    const padding = Array.from({ length: index - count }, () => blankRecord(TREE_RECORD_BYTES));
     const descriptor = fs.openSync(file, "a", 0o600);
     try {
-      fs.writeSync(descriptor, paddedRecord(summary, TREE_RECORD_BYTES));
+      fs.writeSync(descriptor, Buffer.concat([...padding, record]));
       fs.fsyncSync(descriptor);
     } finally {
       fs.closeSync(descriptor);
+      invalidateRecords(file);
     }
     return true;
   }
@@ -454,9 +560,11 @@ export class ApocryphaStore {
         `Complete them first.\n\n${task}`,
       );
     }
-    if (total === 0) return "Apocrypha, oldest first (0 memories).\nNo memories yet. You are awake.";
+    const memories = this.memoryCount(total);
+    if (memories === 0) return "Apocrypha, oldest first (0 memories).\nNo memories yet. You are awake.";
     const lines = [];
     const render = (lo, hi) => {
+      if (this.isEmpty(lo, hi)) return;
       if (hi - lo === 1) { lines.push(this.get(lo)); return; }
       const available = this.blockCount(hi - lo) > lo / (hi - lo);
       const summary = available ? this.readBlock(lo, hi) : null;
@@ -471,8 +579,8 @@ export class ApocryphaStore {
     const pages = paginate(lines, PAGE_BYTES - 1000);
     if (part > pages.length) throw new Error(`No part ${part}; this wake has ${plural(pages.length, "part")}.`);
     const heading = pages.length > 1
-      ? `Apocrypha, part ${part} of ${pages.length}, oldest first (${plural(total, "memory")}).`
-      : `Apocrypha, oldest first (${plural(total, "memory")}).`;
+      ? `Apocrypha, part ${part} of ${pages.length}, oldest first (${plural(memories, "memory")}).`
+      : `Apocrypha, oldest first (${plural(memories, "memory")}).`;
     const body = pages[part - 1].join("\n");
     const footer = part < pages.length
       ? `Not awake yet. Next command: apocrypha_wake(${JSON.stringify({ part: part + 1, snapshot: total, ...(vendor ? { vendor } : {}), ...(allowPending ? { view: fingerprint } : {}) })})`
@@ -515,15 +623,12 @@ export class ApocryphaStore {
     const [lo, hi] = parseRange(range);
     const total = this.count();
     const removed = [];
+    // Blank the block and the summaries built on top of it; siblings stay.
     for (let size = hi - lo; size <= total; size *= 2) {
-      const file = this.treeFile(size);
       const index = Math.floor(lo / size);
-      const count = this.blockCount(size);
-      if (count > index) {
-        for (let block = index; block < count; block += 1) {
-          removed.push([block * size, (block + 1) * size]);
-        }
-        fs.truncateSync(file, index * TREE_RECORD_BYTES);
+      if (this.blockCount(size) > index && this.readBlock(index * size, (index + 1) * size) !== null) {
+        this.blankBlock(size, index);
+        removed.push([index * size, (index + 1) * size]);
       }
     }
     if (!removed.length) throw new Error(`No summary at ${range}.`);
