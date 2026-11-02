@@ -3,6 +3,7 @@ import path from 'node:path';
 import { withWriterLock } from './writer-lock.js';
 import { ApocryphaStore, turnLeafText, turnLeafId } from './storage.js';
 import { randomBytes, createHash } from 'node:crypto';
+import { readJsonl } from './jsonl.js';
 
 // No application cap on transcript turns: the binding limits are the clients'
 // own tool-argument and output limits. The HTTP body limit (server.js) sits
@@ -54,17 +55,7 @@ function requestKey(value) {
   if (value !== undefined && (typeof value !== 'string' || !/^[a-zA-Z0-9._:-]{8,128}$/.test(value))) throw new Error('requestId must contain 8–128 letters, digits, dots, colons, underscores, or hyphens.');
   return value;
 }
-function records(file) {
-  let bytes;
-  try { bytes = fs.readFileSync(file); } catch (e) { if (e.code === 'ENOENT') return []; throw e; }
-  if (!bytes.length) return [];
-  if (bytes.at(-1) !== 10) throw new Error(`Incomplete append in ${path.basename(file)}; preserve the file and request operator recovery. No automatic truncation.`);
-  const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-  return text.slice(0, -1).split('\n').map((line, i) => {
-    try { const v = JSON.parse(line); if (!v || typeof v !== 'object' || Array.isArray(v)) throw new Error(); return v; }
-    catch { throw new Error(`Corrupt ${path.basename(file)} record ${i + 1}; request operator recovery.`); }
-  });
-}
+const records = readJsonl;
 function appendRecord(file, record) {
   const data = Buffer.from(`${JSON.stringify(record)}\n`);
   const fd = fs.openSync(file, 'a', 0o600);
@@ -88,7 +79,18 @@ export class TranscriptStore {
     this.state();
   }
   locked(fn) { return withWriterLock(this.directory, fn); }
+  // Parsed state is cached until either file changes (appends change its size).
   state() {
+    const version = [this.conversationFile, this.turnFile].map(file => {
+      try { const s = fs.statSync(file, { bigint: true }); return `${s.ino}:${s.size}:${s.mtimeNs}`; }
+      catch (e) { if (e.code === 'ENOENT') return '-'; throw e; }
+    }).join('|');
+    if (this.cachedState?.version === version) return this.cachedState.value;
+    const value = this.computeState();
+    this.cachedState = { version, value };
+    return value;
+  }
+  computeState() {
     const events = records(this.conversationFile);
     const conversations = new Map();
     for (const e of events) {

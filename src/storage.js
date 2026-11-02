@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { withWriterLock } from "./writer-lock.js";
+import { readJsonl } from "./jsonl.js";
 
 export const ENTRY_BYTES = 280;
 export const LOG_RECORD_BYTES = 320;
@@ -311,16 +312,11 @@ export class ApocryphaStore {
     // legacy user-excerpt fallbacks receive a speaker label in read views.
     const file = path.join(this.directory, 'TRANSCRIPTS.jsonl');
     try {
-      const stat = fs.statSync(file, {bigint:true});
-      const version = stat.size + ':' + stat.mtimeNs;
-      if (this.attributionVersion !== version) {
+      const all = readJsonl(file);
+      if (this.attributionSource !== all) {
         const turns = new Map();
-        const lines = fs.readFileSync(file, 'utf8').split('\n');
-        lines.pop(); // Ignore an incomplete trailing write.
-        for (const line of lines) {
-          try { const turn=JSON.parse(line); if(turn.id)turns.set(turn.id,turn); } catch {}
-        }
-        this.attributionTurns=turns; this.attributionVersion=version;
+        for (const turn of all) if (turn.id) turns.set(turn.id, turn);
+        this.attributionTurns=turns; this.attributionSource=all;
       }
       const turn=this.attributionTurns.get(id);
       if (!turn || turn.summary?.trim()) return record;
@@ -373,7 +369,18 @@ export class ApocryphaStore {
   pendingTurnSummaries(transcripts) {
     if(!transcripts)return [];
     const summaries=this.turnSummaries();
-    return transcripts.entries().filter(turn=>!turn.summary?.trim() && !summaries[turn.id] && this.fallbackLeaf(turn));
+    return this.pendingTurnLeaves(transcripts).map(({turn})=>turn);
+  }
+
+  // Turns whose leaf still shows an excerpt, newest leaf first, so live turns
+  // are summarized before backfill.
+  pendingTurnLeaves(transcripts) {
+    if(!transcripts)return [];
+    const summaries=this.turnSummaries();
+    return transcripts.entries().filter(turn=>!turn.summary?.trim() && !summaries[turn.id])
+      .map(turn=>({turn,index:this.fallbackLeaf(turn)?.index}))
+      .filter(({index})=>index!==undefined)
+      .sort((a,b)=>b.index-a.index);
   }
 
   saveTurnSummary(turn,value) {
@@ -454,10 +461,38 @@ export class ApocryphaStore {
     return this.pending(total).length;
   }
 
-  compressionTask(total = this.count()) {
-    const next = this.pending(total, 1)[0];
-    if (!next) return null;
-    const [lo, hi] = next;
+  settled(lo, hi) {
+    return this.blockCount(hi - lo) > lo / (hi - lo) && this.readBlock(lo, hi) !== null;
+  }
+
+  memoriesIn(lo, hi) {
+    const prefix = this.nonEmptyPrefix();
+    const end = Math.min(hi, prefix.length - 1);
+    return prefix[end] - prefix[Math.min(lo, end)];
+  }
+
+  // A block can be summarized once each non-empty half has its summary.
+  ready(lo, hi) {
+    if (hi - lo <= RAW_MAX) return true;
+    const mid = (lo + hi) / 2;
+    return [[lo, mid], [mid, hi]].every(([a, b]) => this.isEmpty(a, b) || this.settled(a, b));
+  }
+
+  isPendingReady(lo, hi, total = this.count()) {
+    return hi <= total && !this.isEmpty(lo, hi) && !this.settled(lo, hi) && this.ready(lo, hi);
+  }
+
+  // Ready blocks nearest the present first: live memories before backfill.
+  readyBlocks(total = this.count()) {
+    return this.pending(total).filter(([lo, hi]) => this.ready(lo, hi))
+      .sort((a, b) => b[1] - a[1] || (a[1] - a[0]) - (b[1] - b[0]));
+  }
+
+  nextBlock(total = this.count()) {
+    return this.readyBlocks(total)[0] ?? null;
+  }
+
+  blockTask(lo, hi, total = this.count()) {
     let source;
     if (hi - lo <= RAW_MAX) {
       source = Array.from({ length: hi - lo }, (_, offset) => lo + offset)
@@ -487,6 +522,11 @@ export class ApocryphaStore {
       tail,
       `Next command: apocrypha_sleep({"range":"${lo}-${hi - 1}","summary":"<your line>"})`,
     ].filter((line, index, all) => line !== "" || all[index - 1] !== "").join("\n");
+  }
+
+  compressionTask(total = this.count()) {
+    const next = this.nextBlock(total);
+    return next ? this.blockTask(next[0], next[1], total) : null;
   }
 
   putBlock(lo, hi, value) {
@@ -528,10 +568,10 @@ export class ApocryphaStore {
       throw new Error("range and summary must be supplied together.");
     }
     const [lo, hi] = parseRange(range);
-    const next = this.pending(total, 1)[0];
+    const next = this.nextBlock(total);
     if (!next) return "Nothing left to compress.";
-    if (lo !== next[0] || hi !== next[1]) {
-      if (this.readBlock(lo, hi) !== null) {
+    if (!this.isPendingReady(lo, hi, total)) {
+      if (hi <= total && this.settled(lo, hi)) {
         return `${range} is already settled.\n${this.compressionTask(total) ?? "Nothing left to compress."}`;
       }
       throw new Error(
@@ -570,6 +610,8 @@ export class ApocryphaStore {
       const summary = available ? this.readBlock(lo, hi) : null;
       if (summary === null) {
         if (!allowPending) throw new Error(`The summary of #${lo}-${hi - 1} is blank or corrupt. Run apocrypha_forget with range "${lo}-${hi - 1}".`);
+        // Large unsummarized spans (fresh backfill) show as one line, not thousands.
+        if (hi - lo >= 64) { lines.push(`#${lo}-${hi - 1} [${plural(this.memoriesIn(lo, hi), "memory")}, not yet summarized]`); return; }
         const mid = (lo + hi) / 2; render(lo, mid); render(mid, hi);
       } else lines.push(`#${lo}-${hi - 1} ${summary}`);
     };

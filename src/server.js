@@ -34,6 +34,8 @@ catch (error) { reconciliationError = error.message; console.error(JSON.stringif
 let compactor;
 const mirror = () => queueDriveMirror(store, { render: () => completeWakeView(store, compactor) });
 compactor = new BackgroundCompactor(store, { mode:process.env.APOCRYPHA_COMPACTION_MODE || "background", model:modelFromEnvironment(), transcripts,
+  // Parallel model calls; the real bound is the provider's rate limit, and errors back off all workers.
+  concurrency:Number(process.env.APOCRYPHA_COMPACTOR_CONCURRENCY) || 6,
   onChange:async()=>{try {await mirror();}catch(error){console.error(JSON.stringify({event:'mirror_error',message:error.message}));}} });
 if ((!compactor.configured || compactor.mode === "in-band") && transcripts) {
   try {console.log(JSON.stringify({event:'turn_leaf_reconciliation',...transcripts.reconcile()}));}

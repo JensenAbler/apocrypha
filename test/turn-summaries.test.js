@@ -33,7 +33,7 @@ test('fresh omitted summaries and legacy excerpts become full-exchange leaves; r
  assert.match(completeWakeView(store,c),/excerpts are temporary/);
  await c.step();
  assert.equal(store.pendingCount(),1);
- assert.match(store.get(0),/claude fixed the mirror/);
+ assert.match(store.get(1),/chatgpt reported all checks passed/); // newest leaf first
  assert.equal(new ApocryphaStore(dir).pendingTurnSummaries(ts).length,1);
  while(await c.step()){}
  assert.equal(calls,3);assert.equal(c.status().pendingTurnSummaries,0);
