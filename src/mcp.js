@@ -105,7 +105,7 @@ export function createApocryphaMcpServer(store, options = {}) {
     catch (error) { console.error("Drive mirror failed after write; continuing:", error.message); }
   };
 
-  const transcripts = Object.fromEntries(["append","resolve","get","getConversation","entries","unresolved"].map(name => [name, (...args) => {
+  const transcripts = Object.fromEntries(["append","resolve","get","getConversation","entries","chronologicalEntries","unresolved"].map(name => [name, (...args) => {
     transcriptStore ??= new TranscriptStore(store.directory, { lazyResolution: options.lazyResolution === true });
     return transcriptStore[name](...args);
   }]));
@@ -215,7 +215,7 @@ export function createApocryphaMcpServer(store, options = {}) {
       if ([args.pattern,args.range,args.id].filter(v=>v!==undefined).length !== 1) throw new Error("Supply exactly one of pattern, range, id.");
       if (args.pattern !== undefined) {
         if (args.part !== undefined || args.snapshot !== undefined) throw new Error("Search returns the newest bounded matches; use zoom for transcript paging.");
-        const lines = args.in === "transcripts" ? transcripts.entries().map(t => t.id + " " + JSON.stringify(t)) : store.entries();
+        const lines = args.in === "transcripts" ? transcripts.chronologicalEntries().map(t => t.id + " " + JSON.stringify(t)) : store.entries();
         return safeSearch(lines,args.pattern);
       }
       if (args.in !== undefined) throw new Error("in is only valid with pattern.");

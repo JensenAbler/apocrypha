@@ -188,6 +188,9 @@ export class TranscriptStore {
       : this.reconcileUnlocked(options));
   }
   entries() { return this.state().turns; }
+  chronologicalEntries() {
+    return this.entries().toSorted((a,b)=>Date.parse(a.at)-Date.parse(b.at) || Number(a.id.slice(1))-Number(b.id.slice(1)));
+  }
   get(id) {
     if (!ID.test(id)) throw new Error('Invalid transcript id.');
     const result = this.state().turns.find(t => t.id === id);

@@ -89,6 +89,7 @@ test('restoration and chronological ordinals work while tIDs remain in physical 
  const r=stageHistory(dir,out,{sources:[{vendor:'claude',file}]});assert.equal(r.restoredRedactedTurns,1);
  const next=new TranscriptStore(out);assert.equal(next.get('t1').user,'account 123456789');assert.equal(next.get('t1').omitted,undefined);
  assert.equal(next.get('t1').turn,2);assert.equal(next.get('t2').turn,1);
+ assert.deepEqual(next.chronologicalEntries().map(t=>t.id),['t2','t1']);
  assert.equal(next.append({conv:saved.conv,vendor:'claude',user:'new',assistant:'ok'}).turn,3);
 });
 test('archive links validate and render without pretending to have a web URL',t=>{
