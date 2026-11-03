@@ -4,7 +4,7 @@
 // reply on the conversation's current branch) becomes a transcript record and
 // a turn leaf, in time order across both vendors, starting at slot 0. Each
 // conversation gets a token already linked to its real chat URL.
-// Identification and account numbers are redacted first. Run with the service
+// Text, including numbers, is retained. Run with the service
 // stopped and a backup taken. Dry run unless --apply.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { withWriterLock } from '../src/writer-lock.js';
 import { ApocryphaStore, LOG_RECORD_BYTES, blankRecord, turnLeafText } from '../src/storage.js';
 import { TranscriptStore, pacificTimestamp, validateChatUrl } from '../src/transcripts.js';
-import { redact } from '../src/redact.js';
+const redact = text => ({text,found:[]});
 
 const SOURCE = 'export-2026-01-29';
 const text = value => (typeof value === 'string' ? value : '').replace(/⟦\s*mint\b/gu, '[mint]');

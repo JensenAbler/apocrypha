@@ -51,6 +51,13 @@ export function validateChatUrl(value, vendor) {
   return url.href;
 }
 
+export function validateArchiveLink(value) {
+  if (!value || value.kind !== 'archive' || !['codex','claude-code','cowork'].includes(value.sessionKind) ||
+      typeof value.path !== 'string' || !path.isAbsolute(value.path) || value.path.includes('\0') ||
+      typeof value.sessionId !== 'string' || !/^[A-Za-z0-9_-]{8,128}$/.test(value.sessionId)) throw new Error('Invalid archive link.');
+  return {kind:'archive',path:value.path,sessionId:value.sessionId,sessionKind:value.sessionKind};
+}
+
 function requestKey(value) {
   if (value !== undefined && (typeof value !== 'string' || !/^[a-zA-Z0-9._:-]{8,128}$/.test(value))) throw new Error('requestId must contain 8–128 letters, digits, dots, colons, underscores, or hyphens.');
   return value;
@@ -102,6 +109,7 @@ export class TranscriptStore {
         const c = conversations.get(e.token);
         if (!c || c.vendor !== e.vendor) throw new Error('Conversation event has no matching creation.');
         if (e.type === 'resolved') { c.link = validateChatUrl(e.url, e.vendor); c.status = 'resolved'; }
+        else if (e.type === 'archived') { c.archive = validateArchiveLink(e.archive); c.status = c.link ? 'resolved' : 'archived'; }
         else if (e.type === 'attempt') {
           if (!['missing', 'ambiguous'].includes(e.outcome)) throw new Error('Corrupt resolution outcome.');
           c.attempts += 1; c.firstAttemptAt ||= e.at;
@@ -111,12 +119,13 @@ export class TranscriptStore {
       }
     }
     const turns = records(this.turnFile);
-    const last = new Map();
+    const last = new Map(), turnNumbers = new Set();
     for (let i = 0; i < turns.length; i++) {
       const t = turns[i], c = conversations.get(t.conv);
-      if (t.id !== `t${i + 1}` || !c || c.vendor !== t.vendor || !Number.isSafeInteger(t.turn) || t.turn <= (last.get(t.conv) || 0) ||
+      if (t.id !== `t${i + 1}` || !c || c.vendor !== t.vendor || !Number.isSafeInteger(t.turn) || t.turn < 1 || turnNumbers.has(t.conv + ':' + t.turn) ||
           typeof t.user !== 'string' || typeof t.assistant !== 'string' || (t.summary !== undefined && typeof t.summary !== 'string') || !Number.isFinite(Date.parse(t.at))) throw new Error('Corrupt transcript record or sequence.');
-      last.set(t.conv, t.turn);
+      turnNumbers.add(t.conv + ':' + t.turn);
+      last.set(t.conv, Math.max(last.get(t.conv) || 0, t.turn));
     }
     return { events, conversations, turns, last };
   }
@@ -189,7 +198,7 @@ export class TranscriptStore {
   unresolved(vendor) {
     if (!VENDORS.has(vendor)) throw new Error('Explicit vendor is required for unresolved conversations.');
     if (!this.lazyResolution) return [];
-    return [...this.state().conversations.values()].filter(c => c.vendor === vendor && !c.link && c.status !== 'unresolvable').sort((a, b) => Date.parse(a.at) - Date.parse(b.at)).slice(0, 5);
+    return [...this.state().conversations.values()].filter(c => c.vendor === vendor && !c.link && !c.archive && c.status !== 'unresolvable').sort((a, b) => Date.parse(a.at) - Date.parse(b.at)).slice(0, 5);
   }
   resolve(input) {
     if (!input || !TOKEN.test(input.token)) throw new Error('Invalid conversation token.');

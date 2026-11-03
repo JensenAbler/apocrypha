@@ -13,7 +13,7 @@ const SERVER_INSTRUCTIONS = [
   "Apocrypha is an append-only memory store shared by Claude and ChatGPT. It holds three kinds of records.",
   "Notes are one-line entries in a log, numbered from #0.",
   "Summaries compress aligned blocks of notes into a binary tree, so the whole log can be shown in a bounded view.",
-  "Transcripts are stored conversation turns, numbered from t1, grouped into conversations identified by tokens; a conversation can carry a link to its original chat.",
+  "Transcripts are stored conversation turns, numbered from t1, grouped into conversations identified by tokens; a conversation can carry a link to its original chat or a validated local coding-session archive.",
   "Notes, transcripts, and link records are never edited or deleted; only summaries can be discarded and rebuilt.",
 ].join(" ");
 
@@ -49,7 +49,7 @@ const RECALL_DESCRIPTION = [
   "Reads records without changing anything. Accepts exactly one of pattern, range, or id.",
   "A pattern runs a case-insensitive regular expression over notes, or over transcripts with in: \"transcripts\", and returns the newest matches within the page limit; long transcript matches are excerpted.",
   "A range returns what a settled block was built from: its two child summaries, or its raw notes for blocks of 16 or fewer.",
-  "An id returns one note plus any transcript turns it mentions by id, or one transcript turn plus its conversation's link.",
+  "An id returns one note plus any transcript turns it mentions by id, or one transcript turn plus its conversation's web link or archive path and session id.",
   "Every returned line is labeled with its number, range, or id. Results longer than one page end with the exact command for the next page.",
 ].join(" ");
 

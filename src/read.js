@@ -24,7 +24,8 @@ function raw(store, id) {
 function turnText(transcripts, id) {
   const turn = transcripts.get(id);
   const conv = transcripts.getConversation(turn.conv);
-  return `${id} ${turn.vendor} ${turn.conv} turn ${turn.turn} at ${turn.at}\n${id} user:\n${turn.user}\n${id} assistant:\n${turn.assistant}${turn.omitted ? `\n${id} omitted: ${turn.omitted}` : ""}\n${id} chat: ${conv?.link || "unresolved"}`;
+  const origin = conv?.link || (conv?.archive ? 'archive: ' + conv.archive.path + ' (session ' + conv.archive.sessionId + ', ' + conv.archive.sessionKind + ')' : 'unresolved');
+  return `${id} ${turn.vendor} ${turn.conv} turn ${turn.turn} at ${turn.at}\n${id} user:\n${turn.user}\n${id} assistant:\n${turn.assistant}${turn.omitted ? `\n${id} omitted: ${turn.omitted}` : ""}\n${id} chat: ${origin}`;
 }
 function utf8Chunks(text, budget) {
   const result = [];
